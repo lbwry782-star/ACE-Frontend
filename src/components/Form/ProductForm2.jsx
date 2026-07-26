@@ -23,7 +23,8 @@ function ProductForm2({
   showProgress,
   progressActive,
   progressKey,
-  progressJobStartMs,
+  progressTiming,
+  progressStageLabel = '',
   progressTaskSucceeded,
   progressTaskFailed,
   onProgressRevealReady,
@@ -152,7 +153,8 @@ function ProductForm2({
           key={progressKey}
           progressKey={progressKey}
           visible={progressActive}
-          jobStartTimeMs={progressJobStartMs}
+          progressTiming={progressTiming}
+          progressStageLabel={progressStageLabel}
           taskSucceeded={progressTaskSucceeded}
           taskFailed={progressTaskFailed}
           onRevealReady={onProgressRevealReady}

@@ -3,14 +3,17 @@ import {
   resolveBuilder2ProgressFrame,
   normalizeBuilder2ProgressPercent,
   getBuilder2RemainingTimeText,
-  formatBuilder2ProgressStatusLine
+  formatBuilder2ProgressStatusLine,
+  getBuilder2ElapsedSeconds,
+  BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
 } from '../../utils/builder2Progress'
 import './builder2-progress.css'
 
 function Builder2ProgressBar({
   visible,
   progressKey,
-  jobStartTimeMs = null,
+  progressTiming = null,
+  progressStageLabel = '',
   taskSucceeded = false,
   taskFailed = false,
   onRevealReady
@@ -18,7 +21,6 @@ function Builder2ProgressBar({
   const [displayProgress, setDisplayProgress] = useState(0)
   const [remainingTimeText, setRemainingTimeText] = useState('')
   const rafRef = useRef(null)
-  const fallbackStartRef = useRef(null)
   const completionStartRef = useRef(null)
   const completionFromRef = useRef(null)
   const revealCalledRef = useRef(false)
@@ -28,25 +30,29 @@ function Builder2ProgressBar({
   const visibleRef = useRef(visible)
   const taskSucceededRef = useRef(taskSucceeded)
   const taskFailedRef = useRef(taskFailed)
-  const jobStartTimeMsRef = useRef(jobStartTimeMs)
+  const progressTimingRef = useRef(progressTiming)
   const onRevealReadyRef = useRef(onRevealReady)
 
   visibleRef.current = visible
   taskSucceededRef.current = taskSucceeded
   taskFailedRef.current = taskFailed
-  jobStartTimeMsRef.current = jobStartTimeMs
+  progressTimingRef.current = progressTiming
   onRevealReadyRef.current = onRevealReady
+
+  const estimatedTotalSeconds =
+    progressTiming?.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
 
   useEffect(() => {
     setDisplayProgress(0)
     progressRef.current = 0
-    fallbackStartRef.current = null
     completionStartRef.current = null
     completionFromRef.current = null
     revealCalledRef.current = false
     lastRemainingSecondRef.current = -1
-    setRemainingTimeText(getBuilder2RemainingTimeText(0))
-  }, [progressKey])
+    setRemainingTimeText(
+      getBuilder2RemainingTimeText(0, estimatedTotalSeconds)
+    )
+  }, [progressKey, estimatedTotalSeconds])
 
   useEffect(() => {
     if (rafRef.current) {
@@ -56,10 +62,6 @@ function Builder2ProgressBar({
 
     if (!visible || taskFailed) {
       return undefined
-    }
-
-    if (fallbackStartRef.current == null) {
-      fallbackStartRef.current = performance.now()
     }
 
     const scheduleRevealIfReady = (pct) => {
@@ -74,20 +76,14 @@ function Builder2ProgressBar({
       }
     }
 
-    const resolveElapsedMs = () => {
-      if (jobStartTimeMsRef.current != null) {
-        return Math.max(0, Date.now() - jobStartTimeMsRef.current)
-      }
-      const anchor = fallbackStartRef.current ?? performance.now()
-      return Math.max(0, performance.now() - anchor)
-    }
-
     const tick = (now) => {
       if (!visibleRef.current || taskFailedRef.current) {
         return
       }
 
-      const elapsedMs = resolveElapsedMs()
+      const timing = progressTimingRef.current
+      const totalSeconds = timing?.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
+      const elapsedSeconds = getBuilder2ElapsedSeconds(timing)
 
       if (
         taskSucceededRef.current &&
@@ -102,7 +98,8 @@ function Builder2ProgressBar({
       if (taskSucceededRef.current && completionStartRef.current != null) {
         const completionElapsedMs = now - completionStartRef.current
         nextPercent = resolveBuilder2ProgressFrame({
-          elapsedMs,
+          elapsedSeconds,
+          estimatedTotalSeconds: totalSeconds,
           previousPercent: progressRef.current,
           taskSucceeded: true,
           completionFromPercent: completionFromRef.current,
@@ -110,7 +107,8 @@ function Builder2ProgressBar({
         })
       } else {
         nextPercent = resolveBuilder2ProgressFrame({
-          elapsedMs,
+          elapsedSeconds,
+          estimatedTotalSeconds: totalSeconds,
           previousPercent: progressRef.current
         })
       }
@@ -118,10 +116,10 @@ function Builder2ProgressBar({
       progressRef.current = nextPercent
       setDisplayProgress(nextPercent)
 
-      const elapsedSecond = Math.floor(elapsedMs / 1000)
+      const elapsedSecond = Math.floor(elapsedSeconds)
       if (elapsedSecond !== lastRemainingSecondRef.current) {
         lastRemainingSecondRef.current = elapsedSecond
-        setRemainingTimeText(getBuilder2RemainingTimeText(elapsedMs))
+        setRemainingTimeText(getBuilder2RemainingTimeText(elapsedSeconds, totalSeconds))
       }
 
       scheduleRevealIfReady(nextPercent)
@@ -143,7 +141,7 @@ function Builder2ProgressBar({
         rafRef.current = null
       }
     }
-  }, [visible, taskFailed, progressKey, jobStartTimeMs])
+  }, [visible, taskFailed, progressKey, progressTiming])
 
   useEffect(() => {
     if (!visible || taskFailed || !taskSucceeded) return
@@ -159,7 +157,7 @@ function Builder2ProgressBar({
 
   const safeProgress = normalizeBuilder2ProgressPercent(displayProgress)
   const statusLine = formatBuilder2ProgressStatusLine(
-    remainingTimeText || getBuilder2RemainingTimeText(0)
+    remainingTimeText || getBuilder2RemainingTimeText(0, estimatedTotalSeconds)
   )
 
   return (
@@ -167,6 +165,11 @@ function Builder2ProgressBar({
       <p className="builder2-progress-status-line" dir="rtl" aria-live="polite">
         {statusLine}
       </p>
+      {progressStageLabel ? (
+        <p className="builder2-progress-stage-line" dir="rtl" aria-live="polite">
+          {progressStageLabel}
+        </p>
+      ) : null}
       <div
         className="builder2-progress"
         dir="ltr"

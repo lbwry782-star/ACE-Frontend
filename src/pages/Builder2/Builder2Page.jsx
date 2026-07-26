@@ -5,7 +5,8 @@ import ErrorPanel from '../../components/Error/ErrorPanel'
 import { generateMarketingText } from '../../utils/marketingText'
 import { generateVideo, fetchVideoStatus } from '../../services/api'
 import {
-  resolveBuilder2JobStartTime,
+  reconcileBuilder2JobTiming,
+  getBuilder2StageLabel,
   clearBuilder2JobStartTime
 } from '../../utils/builder2Progress'
 import '../Builder/builder.css'
@@ -230,6 +231,8 @@ function Builder2Page() {
   const [progressTaskSucceeded, setProgressTaskSucceeded] = useState(false)
   const [progressTaskFailed, setProgressTaskFailed] = useState(false)
   const [progressJobStartMs, setProgressJobStartMs] = useState(null)
+  const [progressTiming, setProgressTiming] = useState(null)
+  const [progressStageLabel, setProgressStageLabel] = useState('')
   const [fieldsLocked, setFieldsLocked] = useState(false)
   const requestInFlightRef = useRef(false)
   /** Monotonic id: incremented on each Generate and on unmount — only the latest run may poll / set UI */
@@ -253,6 +256,26 @@ function Builder2Page() {
     progressActiveJobIdRef.current = null
     progressJobStartMsRef.current = null
     setProgressJobStartMs(null)
+    setProgressTiming(null)
+    setProgressStageLabel('')
+  }, [])
+
+  const applyPollProgressTiming = useCallback((jobId, statusPayload) => {
+    const timing = reconcileBuilder2JobTiming(
+      jobId,
+      statusPayload,
+      progressJobStartMsRef.current ?? Date.now()
+    )
+    progressJobStartMsRef.current = timing.startMs
+    setProgressJobStartMs(timing.startMs)
+    setProgressTiming(timing)
+    const stageLabel = getBuilder2StageLabel(
+      statusPayload?.progressStage ?? statusPayload?.progress_stage
+    )
+    if (stageLabel) {
+      setProgressStageLabel(stageLabel)
+    }
+    return timing
   }, [])
 
   const stopProgressWithFailure = useCallback(() => {
@@ -262,6 +285,7 @@ function Builder2Page() {
     setProgressTaskSucceeded(false)
     setProgressActive(false)
     setShowProgressBar(false)
+    setProgressStageLabel('')
   }, [clearProgressJobTiming])
 
   const beginProgress = useCallback(() => {
@@ -269,9 +293,16 @@ function Builder2Page() {
     pendingVideoResultRef.current = null
     setProgressTaskFailed(false)
     setProgressTaskSucceeded(false)
+    setProgressStageLabel('')
     const startedAt = Date.now()
     progressJobStartMsRef.current = startedAt
     setProgressJobStartMs(startedAt)
+    setProgressTiming({
+      startMs: startedAt,
+      estimatedTotalSeconds: 1200,
+      serverElapsedSeconds: null,
+      serverElapsedAtMs: null
+    })
     setProgressKey((prev) => prev + 1)
     setProgressActive(true)
     setShowProgressBar(true)
@@ -291,6 +322,8 @@ function Builder2Page() {
     setProgressTaskSucceeded(false)
     setProgressActive(false)
     setShowProgressBar(false)
+    setProgressStageLabel('')
+    setProgressTiming(null)
     requestInFlightRef.current = false
   }, [clearProgressJobTiming])
 
@@ -399,13 +432,8 @@ function Builder2Page() {
       console.log('FRONTEND_JOB_CREATED jobId=' + jobId)
       activeJobIdRef.current = jobId
       createdJobId = jobId
-      const resolvedStartMs = resolveBuilder2JobStartTime(
-        jobId,
-        progressJobStartMsRef.current ?? Date.now()
-      )
       progressActiveJobIdRef.current = jobId
-      progressJobStartMsRef.current = resolvedStartMs
-      setProgressJobStartMs(resolvedStartMs)
+      applyPollProgressTiming(jobId, start)
       console.log('FRONTEND_SET_ACTIVE_JOB jobId=' + jobId)
 
       tryApplyResolvedProductName(
@@ -489,6 +517,7 @@ function Builder2Page() {
           if (status === 'running') {
             lastGoodPollStatus = 'running'
             hadConfirmedRunningRef.current = true
+            applyPollProgressTiming(pollJobId, st)
             tryApplyResolvedProductName(
               st,
               userLeftProductNameEmpty,
@@ -656,7 +685,8 @@ function Builder2Page() {
         showProgress={showProgressBar}
         progressActive={progressActive}
         progressKey={progressKey}
-        progressJobStartMs={progressJobStartMs}
+        progressTiming={progressTiming}
+        progressStageLabel={progressStageLabel}
         progressTaskSucceeded={progressTaskSucceeded}
         progressTaskFailed={progressTaskFailed}
         onProgressRevealReady={handleProgressRevealReady}
