@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import Builder2ProgressBar from '../ProgressBar/Builder2ProgressBar'
 import { getAgentDisplayName } from '../../utils/agentDisplayName'
 import './form.css'
 
@@ -17,18 +16,9 @@ function ProductForm2({
   formData,
   setFormData,
   onSubmit,
-  fieldsLocked,
+  fieldsReadOnly = false,
   buttonText,
   buttonDisabled,
-  showProgress,
-  progressActive,
-  progressKey,
-  progressTiming,
-  progressStageLabel = '',
-  progressPendingFinalUrl = false,
-  progressTaskSucceeded,
-  progressTaskFailed,
-  onProgressRevealReady,
   isProductNameAuto,
   boldResolvedProductName,
   onProductNameEdited
@@ -36,18 +26,20 @@ function ProductForm2({
   const [errors, setErrors] = useState({})
 
   const handleChange = (field, value) => {
+    if (fieldsReadOnly) return
     if (field === 'productName') {
       console.log('PRODUCT_NAME_SET_SOURCE=user_input value="' + String(value).replace(/"/g, '\\"') + '"')
       if (onProductNameEdited) onProductNameEdited()
     }
-    setFormData(prev => ({ ...prev, [field]: value }))
+    setFormData((prev) => ({ ...prev, [field]: value }))
     if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: null }))
+      setErrors((prev) => ({ ...prev, [field]: null }))
     }
   }
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (buttonDisabled) return
     const newErrors = {}
     if (!formData.productDescription.trim()) {
       newErrors.productDescription = 'Product description is required'
@@ -60,8 +52,6 @@ function ProductForm2({
     onSubmit(formData)
   }
 
-  const isDisabled = fieldsLocked || buttonDisabled
-  /* Bold area driven by canonical string from parent — avoids isProductNameAuto / effect races */
   const showBoldResolvedFieldArea = !!(boldResolvedProductName && String(boldResolvedProductName).trim())
 
   const productNameDir = showBoldResolvedFieldArea
@@ -106,15 +96,14 @@ function ProductForm2({
             className="ace-product-text-input"
             value={formData.productName}
             onChange={(e) => handleChange('productName', e.target.value)}
-            disabled={isDisabled}
+            readOnly={fieldsReadOnly}
+            disabled={fieldsReadOnly}
             placeholder="Enter product name"
             dir={productNameDir}
             style={{ textAlign: nameAlign }}
           />
         )}
-        {errors.productName && (
-          <span className="error-message">{errors.productName}</span>
-        )}
+        {errors.productName ? <span className="error-message">{errors.productName}</span> : null}
       </div>
 
       <div className="form-group">
@@ -129,39 +118,23 @@ function ProductForm2({
           className="ace-product-text-input"
           value={formData.productDescription}
           onChange={(e) => handleChange('productDescription', e.target.value)}
-          disabled={isDisabled}
+          readOnly={fieldsReadOnly}
+          disabled={fieldsReadOnly}
           rows="6"
           placeholder="Enter detailed product description"
           dir={productDescriptionDir}
           style={{ textAlign: descAlign }}
         />
-        {errors.productDescription && (
+        {errors.productDescription ? (
           <span className="error-message">{errors.productDescription}</span>
-        )}
+        ) : null}
       </div>
 
       <div className="form-actions form-actions--builder2">
-        <button
-          type="submit"
-          className="submit-button"
-          disabled={buttonDisabled}
-        >
+        <button type="submit" className="submit-button" disabled={buttonDisabled}>
           {buttonText}
         </button>
       </div>
-      {showProgress && !progressTaskFailed ? (
-        <Builder2ProgressBar
-          key={progressKey}
-          progressKey={progressKey}
-          visible={progressActive}
-          progressTiming={progressTiming}
-          progressStageLabel={progressStageLabel}
-          pendingFinalUrl={progressPendingFinalUrl}
-          taskSucceeded={progressTaskSucceeded}
-          taskFailed={progressTaskFailed}
-          onRevealReady={onProgressRevealReady}
-        />
-      ) : null}
     </form>
   )
 }

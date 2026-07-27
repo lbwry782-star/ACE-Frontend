@@ -7,8 +7,7 @@
 }
 
 .builder2-restore-message,
-.builder2-disconnect-message,
-.builder2-resume-in-progress {
+.builder2-disconnect-message {
   margin: 1rem 0;
   text-align: center;
   color: #e8e8e8;
@@ -19,15 +18,13 @@
   margin-top: 1rem;
 }
 
-.builder2-resume-button,
+.builder2-progress-section {
+  margin-top: 1rem;
+}
+
 .builder2-new-video-button {
   display: block;
   margin: 1rem auto 0;
   padding: 0.65rem 1.25rem;
   cursor: pointer;
-}
-
-.builder2-resume-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
 }

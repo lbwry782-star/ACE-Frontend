@@ -13,17 +13,19 @@ import {
   updateBuilder2CurrentJobFromStatus
 } from '../../utils/builder2JobPersistence'
 import {
+  readBuilder2FormDraft,
+  writeBuilder2FormDraft,
+  clearBuilder2FormDraft
+} from '../../utils/builder2FormDraft'
+import {
   BUILDER2_MSG_RESTORING,
   BUILDER2_MSG_DISCONNECTED,
-  BUILDER2_MSG_RESUME_IN_PROGRESS,
   BUILDER2_MSG_PREPARING_VIDEO_FILE,
   BUILDER2_MSG_NEW_VIDEO,
-  BUILDER2_MSG_RESUME,
   normalizeBuilder2Status,
   isBuilder2StatusCompleted,
   isBuilder2StatusRunning,
   isBuilder2StatusFailed,
-  canBuilder2StatusResume,
   isBuilder2ResumeAlreadyInProgress,
   getBuilder2OwnershipErrorCode,
   getBuilder2SafeFailureMessage,
@@ -41,9 +43,6 @@ import '../Builder/builder.css'
 import './builder2.css'
 
 const POLL_INTERVAL_MS = 2000
-const POLL_LONG_RUNNING_NOTICE_MS = 12 * 60 * 1000
-const BUILDER2_MAX_VIDEOS_SESSION_KEY = 'ace_builder2_max_videos'
-const DEFAULT_BUILDER2_SESSION_LIMIT = 2
 
 const STATE = {
   IDLE: 'IDLE',
@@ -51,18 +50,18 @@ const STATE = {
   SUCCESS: 'SUCCESS'
 }
 
-function resolveBuilder2SessionLimit() {
-  try {
-    const raw = sessionStorage.getItem(BUILDER2_MAX_VIDEOS_SESSION_KEY)
-    const n = Number(raw)
-    if (n === 2 || n === 3 || n === 4) return n
-  } catch (_) {
-    /* ignore */
+function readInitialFormState() {
+  const draft = readBuilder2FormDraft()
+  return {
+    formData: {
+      productName: draft?.productName ?? '',
+      productDescription: draft?.productDescription ?? ''
+    },
+    isProductNameAuto: Boolean(draft?.isProductNameAuto),
+    canonicalResolvedProductName: draft?.canonicalResolvedProductName ?? null
   }
-  return DEFAULT_BUILDER2_SESSION_LIMIT
 }
 
-/** Video job interrupted (e.g. worker shutdown). */
 function getInterruptCode(st) {
   if (!st || typeof st !== 'object') return null
   const nested = st.infrastructure_interruption ?? st.infrastructureInterruption
@@ -73,10 +72,6 @@ function getInterruptCode(st) {
     nested?.interruptCode
   return raw != null ? String(raw) : null
 }
-
-const INTERRUPT_WORKER_SHUTDOWN = 'interrupted_worker_shutdown'
-const MSG_WORKER_SHUTDOWN =
-  'The generation was interrupted by a server restart. Use resume to continue from the same point.'
 
 function extractResolvedProductName(payload) {
   if (!payload || typeof payload !== 'object') return null
@@ -125,35 +120,9 @@ function extractResolvedProductName(payload) {
   return tryString(payload.productName)
 }
 
-function tryApplyResolvedProductName(
-  payload,
-  userLeftProductNameEmpty,
-  lockedResolvedNameRef,
-  fillingResolvedNameRef,
-  setFormData,
-  setIsProductNameAuto,
-  setCanonicalResolvedProductName
-) {
-  if (!userLeftProductNameEmpty) return
-  const name = extractResolvedProductName(payload)
-  if (!name) return
-  if (lockedResolvedNameRef.current !== null) {
-    if (name !== lockedResolvedNameRef.current) return
-    setCanonicalResolvedProductName(lockedResolvedNameRef.current)
-    setFormData((prev) => ({ ...prev, productName: lockedResolvedNameRef.current }))
-    setIsProductNameAuto(true)
-    return
-  }
-  lockedResolvedNameRef.current = name
-  fillingResolvedNameRef.current = true
-  setCanonicalResolvedProductName(name)
-  setFormData((prev) => ({ ...prev, productName: name }))
-  setIsProductNameAuto(true)
-}
-
 function Builder2Page() {
+  const initial = readInitialFormState()
   const [state, setState] = useState(STATE.IDLE)
-  const [sessionLimit, setSessionLimit] = useState(DEFAULT_BUILDER2_SESSION_LIMIT)
   const [restorePhase, setRestorePhase] = useState('checking')
   const [videoResult, setVideoResult] = useState(null)
   const [failureInfo, setFailureInfo] = useState(null)
@@ -161,25 +130,19 @@ function Builder2Page() {
   const [errorMessage, setErrorMessage] = useState(null)
   const [errorPanelTitle, setErrorPanelTitle] = useState('Generation failed')
   const [isDisconnected, setIsDisconnected] = useState(false)
-  const [resumeAlreadyInProgress, setResumeAlreadyInProgress] = useState(false)
-  const [formData, setFormData] = useState({
-    productName: '',
-    productDescription: ''
-  })
-  const [isProductNameAuto, setIsProductNameAuto] = useState(false)
-  const [canonicalResolvedProductName, setCanonicalResolvedProductName] = useState(null)
+  const [formData, setFormData] = useState(initial.formData)
+  const [isProductNameAuto, setIsProductNameAuto] = useState(initial.isProductNameAuto)
+  const [canonicalResolvedProductName, setCanonicalResolvedProductName] = useState(
+    initial.canonicalResolvedProductName
+  )
   const [progressActive, setProgressActive] = useState(false)
   const [progressKey, setProgressKey] = useState(0)
   const [showProgressBar, setShowProgressBar] = useState(false)
   const [progressTaskSucceeded, setProgressTaskSucceeded] = useState(false)
   const [progressTaskFailed, setProgressTaskFailed] = useState(false)
   const [progressPendingFinalUrl, setProgressPendingFinalUrl] = useState(false)
-  const [progressJobStartMs, setProgressJobStartMs] = useState(null)
   const [progressTiming, setProgressTiming] = useState(null)
   const [progressStageLabel, setProgressStageLabel] = useState('')
-  const [fieldsLocked, setFieldsLocked] = useState(false)
-  const [showEmptyForm, setShowEmptyForm] = useState(true)
-  const [resumeInFlight, setResumeInFlight] = useState(false)
 
   const submitInFlightRef = useRef(false)
   const pollGenerationRef = useRef(0)
@@ -188,16 +151,71 @@ function Builder2Page() {
   const progressActiveJobIdRef = useRef(null)
   const progressJobStartMsRef = useRef(null)
   const pendingVideoResultRef = useRef(null)
-  const lockedResolvedNameRef = useRef(null)
+  const lockedResolvedNameRef = useRef(initial.canonicalResolvedProductName)
   const fillingResolvedNameRef = useRef(false)
   const userLeftProductNameEmptyRef = useRef(false)
   const hadConfirmedRunningRef = useRef(false)
-  const pollStartedAtRef = useRef(0)
-  const didLogLongRunningRef = useRef(false)
+  const skipDraftPersistRef = useRef(true)
+
+  const persistFormDraft = useCallback(
+    (nextFormData, extras = {}) => {
+      writeBuilder2FormDraft({
+        productName: nextFormData.productName,
+        productDescription: nextFormData.productDescription,
+        isProductNameAuto:
+          extras.isProductNameAuto !== undefined ? extras.isProductNameAuto : isProductNameAuto,
+        canonicalResolvedProductName:
+          extras.canonicalResolvedProductName !== undefined
+            ? extras.canonicalResolvedProductName
+            : canonicalResolvedProductName
+      })
+    },
+    [isProductNameAuto, canonicalResolvedProductName]
+  )
 
   useEffect(() => {
-    setSessionLimit(resolveBuilder2SessionLimit())
+    skipDraftPersistRef.current = false
   }, [])
+
+  useEffect(() => {
+    if (skipDraftPersistRef.current || fillingResolvedNameRef.current) {
+      fillingResolvedNameRef.current = false
+      return
+    }
+    persistFormDraft(formData)
+  }, [formData, persistFormDraft])
+
+  const tryApplyResolvedProductName = useCallback(
+    (payload) => {
+      if (!userLeftProductNameEmptyRef.current) return
+      const name = extractResolvedProductName(payload)
+      if (!name) return
+      if (lockedResolvedNameRef.current !== null) {
+        if (name !== lockedResolvedNameRef.current) return
+        setCanonicalResolvedProductName(lockedResolvedNameRef.current)
+        setFormData((prev) => {
+          const next = { ...prev, productName: lockedResolvedNameRef.current }
+          persistFormDraft(next, {
+            isProductNameAuto: true,
+            canonicalResolvedProductName: lockedResolvedNameRef.current
+          })
+          return next
+        })
+        setIsProductNameAuto(true)
+        return
+      }
+      lockedResolvedNameRef.current = name
+      fillingResolvedNameRef.current = true
+      setCanonicalResolvedProductName(name)
+      setFormData((prev) => {
+        const next = { ...prev, productName: name }
+        persistFormDraft(next, { isProductNameAuto: true, canonicalResolvedProductName: name })
+        return next
+      })
+      setIsProductNameAuto(true)
+    },
+    [persistFormDraft]
+  )
 
   const applyPollProgressTiming = useCallback((jobId, statusPayload) => {
     const timing = reconcileBuilder2JobTiming(
@@ -206,7 +224,6 @@ function Builder2Page() {
       progressJobStartMsRef.current ?? Date.now()
     )
     progressJobStartMsRef.current = timing.startMs
-    setProgressJobStartMs(timing.startMs)
     setProgressTiming(timing)
     const stageLabel = getBuilder2StageLabel(
       statusPayload?.progressStage ?? statusPayload?.progress_stage
@@ -227,7 +244,6 @@ function Builder2Page() {
       progressJobStartMsRef.current ??
       reconcileBuilder2JobTiming(jobId, {}, Date.now()).startMs
     progressJobStartMsRef.current = startedAt
-    setProgressJobStartMs(startedAt)
     const timing = reconcileBuilder2JobTiming(jobId, { progressStartedAt: startedAt }, startedAt)
     setProgressTiming(timing)
     setProgressKey((prev) => prev + 1)
@@ -244,36 +260,36 @@ function Builder2Page() {
     setProgressStageLabel('')
   }, [])
 
-  const showCompletedResult = useCallback((statusPayload, jobId, { immediate = false } = {}) => {
-    const built = buildBuilder2VideoResult(statusPayload, generateMarketingText)
-    if (!built.videoUrl) {
-      setProgressPendingFinalUrl(true)
-      setProgressStageLabel(BUILDER2_MSG_PREPARING_VIDEO_FILE)
-      beginProgress(jobId)
-      return false
-    }
+  const showCompletedResult = useCallback(
+    (statusPayload, jobId, { immediate = false } = {}) => {
+      const built = buildBuilder2VideoResult(statusPayload, generateMarketingText)
+      if (!built.videoUrl) {
+        setProgressPendingFinalUrl(true)
+        setProgressStageLabel(BUILDER2_MSG_PREPARING_VIDEO_FILE)
+        beginProgress(jobId)
+        return false
+      }
 
-    updateBuilder2CurrentJobFromStatus(jobId, { ...statusPayload, status: 'done', completed: true })
-    setFailureInfo(null)
-    setOwnershipError(null)
-    setIsDisconnected(false)
-    setResumeAlreadyInProgress(false)
+      updateBuilder2CurrentJobFromStatus(jobId, { ...statusPayload, status: 'done', completed: true })
+      setFailureInfo(null)
+      setOwnershipError(null)
+      setIsDisconnected(false)
 
-    if (immediate) {
-      setVideoResult(built)
-      setState(STATE.SUCCESS)
-      setShowEmptyForm(false)
-      setFieldsLocked(true)
-      stopProgressUi()
-      submitInFlightRef.current = false
+      if (immediate) {
+        setVideoResult(built)
+        setState(STATE.SUCCESS)
+        stopProgressUi()
+        submitInFlightRef.current = false
+        return true
+      }
+
+      pendingVideoResultRef.current = { result: built, jobId }
+      setProgressTaskSucceeded(true)
+      setProgressPendingFinalUrl(false)
       return true
-    }
-
-    pendingVideoResultRef.current = { result: built, jobId }
-    setProgressTaskSucceeded(true)
-    setProgressPendingFinalUrl(false)
-    return true
-  }, [beginProgress, stopProgressUi])
+    },
+    [beginProgress, stopProgressUi]
+  )
 
   const handleProgressRevealReady = useCallback(() => {
     const pending = pendingVideoResultRef.current
@@ -282,8 +298,6 @@ function Builder2Page() {
       setErrorPanelTitle('Generation failed')
       setVideoResult(pending.result)
       setState(STATE.SUCCESS)
-      setShowEmptyForm(false)
-      setFieldsLocked(true)
     }
     pendingVideoResultRef.current = null
     stopProgressUi()
@@ -291,31 +305,28 @@ function Builder2Page() {
     submitInFlightRef.current = false
   }, [stopProgressUi])
 
-  const handleFailureFromStatus = useCallback((statusPayload, jobId) => {
-    const ownership = getBuilder2OwnershipErrorCode(statusPayload)
-    if (ownership) {
-      setOwnershipError(getBuilder2SafeFailureMessage(statusPayload))
-      setFailureInfo(null)
+  const handleFailureFromStatus = useCallback(
+    (statusPayload, jobId) => {
+      const ownership = getBuilder2OwnershipErrorCode(statusPayload)
+      if (ownership) {
+        setOwnershipError(getBuilder2SafeFailureMessage(statusPayload))
+        setFailureInfo(null)
+        updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
+        stopProgressUi()
+        setState(STATE.IDLE)
+        return
+      }
+
       updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
       stopProgressUi()
+      setFailureInfo({
+        message: getBuilder2SafeFailureMessage(statusPayload),
+        jobId
+      })
       setState(STATE.IDLE)
-      setShowEmptyForm(false)
-      return
-    }
-
-    const canResume = canBuilder2StatusResume(statusPayload)
-    updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
-    stopProgressUi()
-    setFailureInfo({
-      message: getBuilder2SafeFailureMessage(statusPayload),
-      canResume,
-      jobId
-    })
-    setResumeAlreadyInProgress(isBuilder2ResumeAlreadyInProgress(statusPayload))
-    setState(STATE.IDLE)
-    setShowEmptyForm(false)
-    setFieldsLocked(true)
-  }, [stopProgressUi])
+    },
+    [stopProgressUi]
+  )
 
   const processStatusPayload = useCallback(
     async (jobId, statusPayload, { fromRestore = false } = {}) => {
@@ -332,7 +343,11 @@ function Builder2Page() {
       }
 
       if (isBuilder2ResumeAlreadyInProgress(statusPayload)) {
-        setResumeAlreadyInProgress(true)
+        setFailureInfo(null)
+        if (!showProgressBar || fromRestore) {
+          beginProgress(jobId)
+        }
+        return 'continue'
       }
 
       const ownership = getBuilder2OwnershipErrorCode(statusPayload)
@@ -351,43 +366,27 @@ function Builder2Page() {
           if (!showProgressBar) beginProgress(jobId)
           setIsDisconnected(false)
           setFailureInfo(null)
-          setShowEmptyForm(false)
           return 'continue'
         }
 
         applyPollProgressTiming(jobId, statusPayload)
-        tryApplyResolvedProductName(
-          statusPayload,
-          userLeftProductNameEmptyRef.current,
-          lockedResolvedNameRef,
-          fillingResolvedNameRef,
-          setFormData,
-          setIsProductNameAuto,
-          setCanonicalResolvedProductName
-        )
+        tryApplyResolvedProductName(statusPayload)
         showCompletedResult(statusPayload, jobId)
         setIsDisconnected(false)
         return 'terminal'
       }
 
-      if (isBuilder2StatusFailed(statusPayload) && !canBuilder2StatusResume(statusPayload)) {
-        handleFailureFromStatus(statusPayload, jobId)
-        return 'terminal'
-      }
-
-      if (isBuilder2StatusFailed(statusPayload) && canBuilder2StatusResume(statusPayload)) {
+      if (isBuilder2StatusFailed(statusPayload)) {
         handleFailureFromStatus(statusPayload, jobId)
         return 'terminal'
       }
 
       const status = normalizeBuilder2Status(statusPayload)
       if (status === 'interrupted') {
-        const ic = getInterruptCode(statusPayload)?.toLowerCase() ?? ''
         handleFailureFromStatus(
           {
             ...statusPayload,
-            canResume: true,
-            failureReason: ic === INTERRUPT_WORKER_SHUTDOWN ? MSG_WORKER_SHUTDOWN : statusPayload.error
+            failureReason: getInterruptCode(statusPayload) ?? statusPayload.error
           },
           jobId
         )
@@ -398,21 +397,12 @@ function Builder2Page() {
         hadConfirmedRunningRef.current = true
         applyPollProgressTiming(jobId, statusPayload)
         updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
-        tryApplyResolvedProductName(
-          statusPayload,
-          userLeftProductNameEmptyRef.current,
-          lockedResolvedNameRef,
-          fillingResolvedNameRef,
-          setFormData,
-          setIsProductNameAuto,
-          setCanonicalResolvedProductName
-        )
+        tryApplyResolvedProductName(statusPayload)
         if (!showProgressBar || fromRestore) {
           beginProgress(jobId)
         }
         setIsDisconnected(false)
         setFailureInfo(null)
-        setShowEmptyForm(false)
         return 'continue'
       }
 
@@ -423,29 +413,24 @@ function Builder2Page() {
 
       return 'continue'
     },
-    [applyPollProgressTiming, beginProgress, handleFailureFromStatus, showCompletedResult, showProgressBar]
+    [
+      applyPollProgressTiming,
+      beginProgress,
+      handleFailureFromStatus,
+      showCompletedResult,
+      showProgressBar,
+      tryApplyResolvedProductName
+    ]
   )
 
   const runPollLoop = useCallback(
     async (jobId, generation) => {
       let consecutiveTransientPollErrors = 0
-      pollStartedAtRef.current = Date.now()
-      didLogLongRunningRef.current = false
 
       while (pollGenerationRef.current === generation) {
         const persisted = readBuilder2CurrentJob()
         if (persisted?.jobId && persisted.jobId !== jobId) {
           break
-        }
-
-        if (
-          hadConfirmedRunningRef.current &&
-          Date.now() - pollStartedAtRef.current >= POLL_LONG_RUNNING_NOTICE_MS &&
-          !didLogLongRunningRef.current
-        ) {
-          didLogLongRunningRef.current = true
-          setErrorPanelTitle('Please wait')
-          setErrorMessage('Still processing… this can take a little longer.')
         }
 
         const controller = new AbortController()
@@ -464,7 +449,6 @@ function Builder2Page() {
         if (isTransientBuilder2PollFailure(st)) {
           consecutiveTransientPollErrors += 1
           setIsDisconnected(true)
-          setErrorMessage(BUILDER2_MSG_DISCONNECTED)
           const backoffMs = Math.min(
             12000,
             POLL_INTERVAL_MS + consecutiveTransientPollErrors * 1500
@@ -476,7 +460,6 @@ function Builder2Page() {
         if (consecutiveTransientPollErrors > 0) {
           consecutiveTransientPollErrors = 0
           setIsDisconnected(false)
-          setErrorMessage(null)
         }
 
         const outcome = await processStatusPayload(jobId, st)
@@ -520,7 +503,6 @@ function Builder2Page() {
     const persisted = readBuilder2CurrentJob()
     if (!persisted?.jobId) {
       setRestorePhase('done')
-      setShowEmptyForm(true)
       return undefined
     }
 
@@ -537,8 +519,6 @@ function Builder2Page() {
           const built = buildBuilder2VideoResult(st, generateMarketingText)
           setVideoResult(built)
           setState(STATE.SUCCESS)
-          setShowEmptyForm(false)
-          setFieldsLocked(true)
         } else {
           beginProgress(jobId)
           startPolling(jobId)
@@ -563,11 +543,7 @@ function Builder2Page() {
   }, [beginProgress, processStatusPayload, startPolling])
 
   const handleSubmit = async (data) => {
-    if (submitInFlightRef.current || videoResult) {
-      return
-    }
-
-    if (readBuilder2CurrentJob()?.jobId) {
+    if (submitInFlightRef.current || readBuilder2CurrentJob()?.jobId) {
       return
     }
 
@@ -577,17 +553,20 @@ function Builder2Page() {
     if (!userLeftProductNameEmptyRef.current) {
       lockedResolvedNameRef.current = null
     }
-    setCanonicalResolvedProductName(null)
     setFailureInfo(null)
     setOwnershipError(null)
     setVideoResult(null)
     setIsDisconnected(false)
-    setResumeAlreadyInProgress(false)
     setErrorMessage(null)
     setErrorPanelTitle('Generation failed')
-    setFieldsLocked(true)
-    setShowEmptyForm(false)
     hadConfirmedRunningRef.current = false
+
+    persistFormDraft(data, {
+      isProductNameAuto: userLeftProductNameEmptyRef.current ? isProductNameAuto : false,
+      canonicalResolvedProductName: userLeftProductNameEmptyRef.current
+        ? canonicalResolvedProductName
+        : null
+    })
 
     try {
       const start = await generateVideo({
@@ -605,8 +584,6 @@ function Builder2Page() {
 
       if (!start?.ok || !jobId) {
         submitInFlightRef.current = false
-        setFieldsLocked(false)
-        setShowEmptyForm(true)
         setErrorPanelTitle('Generation failed')
         setErrorMessage(
           start?.error || start?.message || 'Could not start video generation. Please try again.'
@@ -626,78 +603,14 @@ function Builder2Page() {
       progressActiveJobIdRef.current = jobId
       applyPollProgressTiming(jobId, start)
       beginProgress(jobId)
-
-      tryApplyResolvedProductName(
-        start,
-        userLeftProductNameEmptyRef.current,
-        lockedResolvedNameRef,
-        fillingResolvedNameRef,
-        setFormData,
-        setIsProductNameAuto,
-        setCanonicalResolvedProductName
-      )
-
+      tryApplyResolvedProductName(start)
       startPolling(jobId)
     } catch (_) {
       submitInFlightRef.current = false
-      setFieldsLocked(false)
-      setShowEmptyForm(true)
       setErrorPanelTitle('Generation failed')
       setErrorMessage('Something went wrong. Please try again.')
       setState(STATE.IDLE)
       stopProgressUi()
-    }
-  }
-
-  const handleResume = async () => {
-    const jobId = failureInfo?.jobId ?? activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId
-    if (!jobId || resumeInFlight || resumeAlreadyInProgress) {
-      return
-    }
-
-    setResumeInFlight(true)
-    setFailureInfo((prev) => (prev ? { ...prev, canResume: prev.canResume } : prev))
-    setErrorMessage(null)
-
-    try {
-      const response = await resumeBuilder2Job(jobId)
-      if (response?.aborted) {
-        return
-      }
-
-      const ownership = getBuilder2OwnershipErrorCode(response)
-      if (ownership) {
-        setOwnershipError(getBuilder2SafeFailureMessage(response))
-        setFailureInfo(null)
-        return
-      }
-
-      if (isBuilder2ResumeAlreadyInProgress(response)) {
-        setResumeAlreadyInProgress(true)
-        setFailureInfo(null)
-        beginProgress(jobId)
-        startPolling(jobId)
-        return
-      }
-
-      if (isBuilder2StatusCompleted(response)) {
-        if (showCompletedResult(response, jobId, { immediate: true })) {
-          return
-        }
-        beginProgress(jobId)
-        startPolling(jobId)
-        return
-      }
-
-      updateBuilder2CurrentJobFromStatus(jobId, response)
-      setFailureInfo(null)
-      setResumeAlreadyInProgress(false)
-      beginProgress(jobId)
-      startPolling(jobId)
-    } catch (_) {
-      setErrorMessage(BUILDER2_MSG_DISCONNECTED)
-    } finally {
-      setResumeInFlight(false)
     }
   }
 
@@ -708,6 +621,7 @@ function Builder2Page() {
       clearBuilder2JobStartTime(jobId)
     }
     clearBuilder2CurrentJob()
+    clearBuilder2FormDraft()
     activeJobIdRef.current = null
     progressActiveJobIdRef.current = null
     progressJobStartMsRef.current = null
@@ -721,15 +635,12 @@ function Builder2Page() {
     setOwnershipError(null)
     setErrorMessage(null)
     setIsDisconnected(false)
-    setResumeAlreadyInProgress(false)
     setState(STATE.IDLE)
-    setShowEmptyForm(true)
-    setFieldsLocked(false)
     setIsProductNameAuto(false)
     setCanonicalResolvedProductName(null)
+    setFormData({ productName: '', productDescription: '' })
     stopProgressUi()
     setProgressTiming(null)
-    setProgressJobStartMs(null)
   }
 
   const handlePlaybackError = useCallback(async () => {
@@ -743,24 +654,22 @@ function Builder2Page() {
     }
   }, [])
 
+  const hasPersistedJob = Boolean(readBuilder2CurrentJob()?.jobId)
+  const isActivelyProcessing = state === STATE.GENERATING || showProgressBar
+  const fieldsReadOnly = isActivelyProcessing
+  const submitDisabled =
+    restorePhase === 'checking' ||
+    hasPersistedJob ||
+    submitInFlightRef.current ||
+    isActivelyProcessing
+
   const getButtonText = () => {
-    if (videoResult) return 'CONSUMED'
-    if (failureInfo || ownershipError) return 'CONSUMED'
+    if (hasPersistedJob && !isActivelyProcessing) return 'GENERATE AGAIN'
+    if (isActivelyProcessing) return 'GENERATING'
     return 'GENERATE'
   }
 
-  const isButtonDisabled = () => {
-    return (
-      state === STATE.GENERATING ||
-      restorePhase === 'checking' ||
-      Boolean(videoResult) ||
-      Boolean(failureInfo) ||
-      Boolean(ownershipError) ||
-      submitInFlightRef.current
-    )
-  }
-
-  const showForm = showEmptyForm && restorePhase === 'done' && !videoResult && !failureInfo && !ownershipError
+  void resumeBuilder2Job
 
   return (
     <div className="builder-page builder2-page">
@@ -774,57 +683,42 @@ function Builder2Page() {
         </p>
       ) : null}
 
-      {isDisconnected && !failureInfo ? (
+      {isDisconnected ? (
         <p className="builder2-disconnect-message" dir="rtl" aria-live="polite">
           {BUILDER2_MSG_DISCONNECTED}
         </p>
       ) : null}
 
-      {resumeAlreadyInProgress && !showProgressBar ? (
-        <p className="builder2-resume-in-progress" dir="rtl" aria-live="polite">
-          {BUILDER2_MSG_RESUME_IN_PROGRESS}
-        </p>
-      ) : null}
+      <ProductForm2
+        formData={formData}
+        setFormData={setFormData}
+        onSubmit={handleSubmit}
+        fieldsReadOnly={fieldsReadOnly}
+        buttonText={getButtonText()}
+        buttonDisabled={submitDisabled}
+        isProductNameAuto={isProductNameAuto}
+        boldResolvedProductName={canonicalResolvedProductName}
+        onProductNameEdited={() => {
+          lockedResolvedNameRef.current = null
+          setIsProductNameAuto(false)
+          setCanonicalResolvedProductName(null)
+        }}
+      />
 
-      {showForm ? (
-        <ProductForm2
-          formData={formData}
-          setFormData={setFormData}
-          onSubmit={handleSubmit}
-          fieldsLocked={fieldsLocked}
-          buttonText={getButtonText()}
-          buttonDisabled={isButtonDisabled()}
-          showProgress={showProgressBar}
-          progressActive={progressActive}
-          progressKey={progressKey}
-          progressTiming={progressTiming}
-          progressStageLabel={progressStageLabel}
-          progressPendingFinalUrl={progressPendingFinalUrl}
-          progressTaskSucceeded={progressTaskSucceeded}
-          progressTaskFailed={progressTaskFailed}
-          onProgressRevealReady={handleProgressRevealReady}
-          isProductNameAuto={isProductNameAuto}
-          boldResolvedProductName={canonicalResolvedProductName}
-          onProductNameEdited={() => {
-            lockedResolvedNameRef.current = null
-            setIsProductNameAuto(false)
-            setCanonicalResolvedProductName(null)
-          }}
-        />
-      ) : null}
-
-      {!showForm && showProgressBar ? (
-        <Builder2ProgressBar
-          key={progressKey}
-          progressKey={progressKey}
-          visible={progressActive}
-          progressTiming={progressTiming}
-          progressStageLabel={progressStageLabel}
-          pendingFinalUrl={progressPendingFinalUrl}
-          taskSucceeded={progressTaskSucceeded}
-          taskFailed={progressTaskFailed}
-          onRevealReady={handleProgressRevealReady}
-        />
+      {showProgressBar ? (
+        <section className="builder2-progress-section" aria-live="polite">
+          <Builder2ProgressBar
+            key={progressKey}
+            progressKey={progressKey}
+            visible={progressActive}
+            progressTiming={progressTiming}
+            progressStageLabel={progressStageLabel}
+            pendingFinalUrl={progressPendingFinalUrl}
+            taskSucceeded={progressTaskSucceeded}
+            taskFailed={progressTaskFailed}
+            onRevealReady={handleProgressRevealReady}
+          />
+        </section>
       ) : null}
 
       {ownershipError ? (
@@ -840,20 +734,10 @@ function Builder2Page() {
         <div className="builder2-failure-panel" dir="rtl">
           <ErrorPanel
             error={failureInfo.message}
-            onRetry={() => setErrorMessage(null)}
+            onRetry={() => setFailureInfo(null)}
             buttonLabel="Dismiss"
             title="Generation failed"
           />
-          {failureInfo.canResume ? (
-            <button
-              type="button"
-              className="builder2-resume-button"
-              onClick={handleResume}
-              disabled={resumeInFlight || resumeAlreadyInProgress}
-            >
-              {BUILDER2_MSG_RESUME}
-            </button>
-          ) : null}
         </div>
       ) : null}
 

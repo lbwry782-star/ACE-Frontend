@@ -185,9 +185,9 @@ assert.deepEqual(parseBuilder2ProgressTimingFromStatus({ status: 'running' }), {
 })
 
 // Component wiring
-assert.match(productForm2Source, /Builder2ProgressBar/)
-assert.match(builder2PageSource, /applyPollProgressTiming/)
-assert.match(builder2PageSource, /reconcileBuilder2JobTiming/)
+assert.match(builder2PageSource, /builder2-progress-section/)
+assert.match(builder2PageSource, /Builder2ProgressBar/)
+assert.doesNotMatch(productForm2Source, /Builder2ProgressBar/)
 assert.match(builder2PageSource, /ensureBuilder2OwnerContext/)
 assert.match(builder2PageSource, /resumeBuilder2Job/)
 assert.match(builder2PageSource, /BUILDER2_MSG_NEW_VIDEO/)

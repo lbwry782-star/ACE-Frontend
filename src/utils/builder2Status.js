@@ -8,7 +8,9 @@ export const BUILDER2_MSG_DISCONNECTED =
 export const BUILDER2_MSG_RESUME_IN_PROGRESS = 'העבודה כבר ממשיכה מהשלב האחרון.'
 export const BUILDER2_MSG_PREPARING_VIDEO_FILE = 'מכין את קובץ הווידאו לצפייה'
 export const BUILDER2_MSG_NEW_VIDEO = 'צור סרטון חדש'
+/** Internal constant — not shown in public Builder2 UI. */
 export const BUILDER2_MSG_RESUME = 'המשך מאותה נקודה'
+export const BUILDER2_MSG_GENERIC_FAILURE = 'לא הצלחנו להשלים את יצירת הסרטון.'
 
 const OWNERSHIP_ERROR_CODES = new Set([
   'ownership_required_historical_job',
@@ -124,6 +126,17 @@ export function getBuilder2OwnershipErrorCode(payload) {
   return null
 }
 
+/** @param {unknown} value */
+function isBuilder2InternalFailureToken(value) {
+  const s = String(value ?? '').trim().toLowerCase()
+  if (!s) return false
+  if (s.startsWith('builder2_')) return true
+  if (/^create_failed$/i.test(s)) return true
+  if (/_failed$/.test(s) && !s.includes(' ')) return true
+  if (/_invalid_/.test(s) && !s.includes(' ')) return true
+  return false
+}
+
 /**
  * @param {object|null|undefined} payload
  */
@@ -132,15 +145,29 @@ export function getBuilder2SafeFailureMessage(payload) {
   if (ownership) {
     return 'לא ניתן להמשיך את העבודה הזו מהדפדפן הנוכחי. נסו שוב מאותו מכשיר ודפדפן.'
   }
+
   const stage = payload?.failureStage ?? payload?.failure_stage
   const reason = payload?.failureReason ?? payload?.failure_reason
   const err =
     typeof payload?.error === 'string'
       ? payload.error
       : payload?.error?.message ?? payload?.message
-  const parts = [stage ? String(stage) : null, reason ? String(reason) : null, err ? String(err) : null]
-    .filter(Boolean)
-  return parts[0] || 'יצירת הווידאו נכשלה.'
+
+  const candidates = [stage, reason, err].filter(Boolean).map(String)
+  if (candidates.some(isBuilder2InternalFailureToken)) {
+    return BUILDER2_MSG_GENERIC_FAILURE
+  }
+
+  const userFacing = candidates.find((part) => /[\u0590-\u05FF]/.test(part))
+  if (userFacing) {
+    return userFacing
+  }
+
+  if (candidates.length > 0) {
+    return BUILDER2_MSG_GENERIC_FAILURE
+  }
+
+  return BUILDER2_MSG_GENERIC_FAILURE
 }
 
 /**

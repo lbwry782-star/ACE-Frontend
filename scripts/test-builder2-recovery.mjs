@@ -31,7 +31,6 @@ import {
   buildBuilder2VideoResult,
   BUILDER2_MSG_RESTORING,
   BUILDER2_MSG_DISCONNECTED,
-  BUILDER2_MSG_RESUME,
   BUILDER2_MSG_NEW_VIDEO
 } from '../src/utils/builder2Status.js'
 import {
@@ -104,8 +103,8 @@ assert.match(builder2PageSource, /writeBuilder2CurrentJob/)
 assert.match(builder2PageSource, /readBuilder2CurrentJob/)
 assert.match(builder2PageSource, /BUILDER2_MSG_RESTORING/)
 assert.match(builder2PageSource, /restorePhase/)
-assert.match(builder2PageSource, /canBuilder2StatusResume/)
-assert.match(builder2PageSource, /BUILDER2_MSG_RESUME/)
+assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESUME/)
+assert.doesNotMatch(builder2PageSource, /builder2-resume-button/)
 
 // 7. Refresh never submits generate-video automatically
 assert.match(builder2PageSource, /readBuilder2CurrentJob\(\)\?\.jobId/)
@@ -120,22 +119,20 @@ assert.doesNotMatch(
   /generateVideo|resumeBuilder2Job/
 )
 
-// 10–12. Resume same jobId + owner, never replacement job
+// 10–12. Resume API remains; page keeps import for internal architecture
 assert.match(apiSource, /builder2-resume/)
 assert.match(apiSource, /jobId: String\(jobId\)/)
-assert.match(builder2PageSource, /resumeBuilder2Job\(jobId\)/)
-assert.doesNotMatch(
-  builder2PageSource.match(/handleResume[\s\S]*?finally/)?.[0] ?? '',
-  /generateVideo/
-)
+assert.match(builder2PageSource, /resumeBuilder2Job/)
+assert.doesNotMatch(builder2PageSource, /handleResume/)
 
-// 13–14. Duplicate resume blocked; resumeAlreadyInProgress continues polling
-assert.match(builder2PageSource, /resumeInFlight/)
+// 13–14. resumeAlreadyInProgress continues polling silently
 assert.match(builder2PageSource, /isBuilder2ResumeAlreadyInProgress/)
 assert.ok(isBuilder2ResumeAlreadyInProgress({ resumeAlreadyInProgress: true }))
+assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESUME_IN_PROGRESS/)
 
-// 15. Completed resume restores result immediately
-assert.match(builder2PageSource, /immediate:\s*true/)
+// 15. Completed result path supports immediate reveal option
+assert.match(builder2PageSource, /immediate\s*=\s*false/)
+assert.match(builder2PageSource, /showCompletedResult/)
 
 // 16. Ownership failure does not create new job
 const ownership = getBuilder2OwnershipErrorCode({ error: 'ownership_mismatch' })
@@ -254,7 +251,6 @@ assert.ok(floored <= 40)
 // Extra: UI constants present
 assert.equal(BUILDER2_MSG_RESTORING, 'משחזר את העבודה האחרונה…')
 assert.equal(BUILDER2_MSG_DISCONNECTED, 'החיבור נותק. העבודה נשמרה וננסה להתחבר מחדש.')
-assert.equal(BUILDER2_MSG_RESUME, 'המשך מאותה נקודה')
 assert.equal(BUILDER2_MSG_NEW_VIDEO, 'צור סרטון חדש')
 
 console.log('builder2 recovery tests passed')
