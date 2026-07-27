@@ -14,6 +14,7 @@ function Builder2ProgressBar({
   progressKey,
   progressTiming = null,
   progressStageLabel = '',
+  pendingFinalUrl = false,
   taskSucceeded = false,
   taskFailed = false,
   onRevealReady
@@ -30,12 +31,14 @@ function Builder2ProgressBar({
   const visibleRef = useRef(visible)
   const taskSucceededRef = useRef(taskSucceeded)
   const taskFailedRef = useRef(taskFailed)
+  const pendingFinalUrlRef = useRef(pendingFinalUrl)
   const progressTimingRef = useRef(progressTiming)
   const onRevealReadyRef = useRef(onRevealReady)
 
   visibleRef.current = visible
   taskSucceededRef.current = taskSucceeded
   taskFailedRef.current = taskFailed
+  pendingFinalUrlRef.current = pendingFinalUrl
   progressTimingRef.current = progressTiming
   onRevealReadyRef.current = onRevealReady
 
@@ -83,6 +86,7 @@ function Builder2ProgressBar({
 
       const timing = progressTimingRef.current
       const totalSeconds = timing?.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
+      const stageFloor = timing?.stageFloor ?? 0
       const elapsedSeconds = getBuilder2ElapsedSeconds(timing)
 
       if (
@@ -109,7 +113,9 @@ function Builder2ProgressBar({
         nextPercent = resolveBuilder2ProgressFrame({
           elapsedSeconds,
           estimatedTotalSeconds: totalSeconds,
-          previousPercent: progressRef.current
+          previousPercent: progressRef.current,
+          stageFloor,
+          pendingFinalUrl: pendingFinalUrlRef.current
         })
       }
 

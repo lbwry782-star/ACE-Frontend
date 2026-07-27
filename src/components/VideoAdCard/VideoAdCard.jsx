@@ -14,7 +14,8 @@ function VideoAdCard({
   headlineText: propHeadlineText,
   overlayHeadline: propOverlayHeadline,
   productNameResolved: propProductNameResolved,
-  isGenerating
+  isGenerating,
+  onPlaybackError
 }) {
   const [videoSrc, setVideoSrc] = useState(propVideoSrc || null)
   const [marketingText, setMarketingText] = useState(propMarketingText ?? generateMarketingText(attemptNumber))
@@ -107,6 +108,9 @@ function VideoAdCard({
             controls
             playsInline
             preload="metadata"
+            onError={() => {
+              if (onPlaybackError) onPlaybackError()
+            }}
           >
             Your browser does not support the video tag.
           </video>

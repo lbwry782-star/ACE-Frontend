@@ -25,6 +25,7 @@ function ProductForm2({
   progressKey,
   progressTiming,
   progressStageLabel = '',
+  progressPendingFinalUrl = false,
   progressTaskSucceeded,
   progressTaskFailed,
   onProgressRevealReady,
@@ -155,6 +156,7 @@ function ProductForm2({
           visible={progressActive}
           progressTiming={progressTiming}
           progressStageLabel={progressStageLabel}
+          pendingFinalUrl={progressPendingFinalUrl}
           taskSucceeded={progressTaskSucceeded}
           taskFailed={progressTaskFailed}
           onRevealReady={onProgressRevealReady}

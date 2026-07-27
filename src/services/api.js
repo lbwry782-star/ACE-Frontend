@@ -1,3 +1,5 @@
+import { getBuilder2OwnerBatchStateHeader } from '../utils/builder2OwnerContext.js'
+
 // Get backend URL from environment variables
 // Support both Vite (import.meta.env) and CRA (process.env)
 const getBackendUrl = () => {
@@ -25,6 +27,18 @@ const normalizeBaseUrl = (base) => {
 }
 
 const API_BASE_URL = normalizeBaseUrl(getBackendUrl())
+
+/**
+ * Builder2 requests share a stable X-ACE-Batch-State owner context.
+ * @param {Record<string, string>} [extra]
+ */
+function buildBuilder2RequestHeaders(extra = {}) {
+  return {
+    Accept: 'application/json',
+    'X-ACE-Batch-State': getBuilder2OwnerBatchStateHeader(),
+    ...extra
+  }
+}
 
 /**
  * GET backend security config. Used once at app startup.
@@ -329,16 +343,16 @@ async function generate(payload) {
 /**
  * POST /api/generate-video — starts async video job; returns immediately with jobId (Builder2).
  */
-async function generateVideo({ productName, productDescription }) {
+async function generateVideo({ productName, productDescription, signal } = {}) {
   try {
     const response = await fetch(`${API_BASE_URL}/api/generate-video`, {
       method: 'POST',
       mode: 'cors',
       credentials: 'omit',
-      headers: {
-        Accept: 'application/json',
+      signal,
+      headers: buildBuilder2RequestHeaders({
         'Content-Type': 'application/json'
-      },
+      }),
       body: JSON.stringify({
         productName: productName ?? '',
         productDescription: productDescription ?? ''
@@ -352,7 +366,10 @@ async function generateVideo({ productName, productDescription }) {
       return { ok: false, ...data }
     }
     return data
-  } catch (_) {
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, aborted: true }
+    }
     return { ok: false }
   }
 }
@@ -360,14 +377,15 @@ async function generateVideo({ productName, productDescription }) {
 /**
  * GET /api/video-status?jobId=... — poll async video job (Builder2).
  */
-async function fetchVideoStatus(jobId) {
+async function fetchVideoStatus(jobId, { signal } = {}) {
   try {
     const params = new URLSearchParams({ jobId: String(jobId) })
     const response = await fetch(`${API_BASE_URL}/api/video-status?${params}`, {
       method: 'GET',
       mode: 'cors',
       credentials: 'omit',
-      headers: { Accept: 'application/json' }
+      signal,
+      headers: buildBuilder2RequestHeaders()
     })
     const data = await response.json().catch(() => null)
     if (!data || typeof data !== 'object') {
@@ -376,12 +394,52 @@ async function fetchVideoStatus(jobId) {
     if (!response.ok) {
       return {
         status: 'error',
-        error: data.error || data.message || `Server error: ${response.status}`
+        error: data.error || data.message || `Server error: ${response.status}`,
+        ...data
       }
     }
     return data
-  } catch (_) {
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { status: 'error', error: 'aborted', aborted: true }
+    }
     return { status: 'error', error: 'Network error' }
+  }
+}
+
+/**
+ * POST /api/builder2-resume — resume durable Builder2 job from first incomplete stage.
+ */
+async function resumeBuilder2Job(jobId, { signal } = {}) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/builder2-resume`, {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      signal,
+      headers: buildBuilder2RequestHeaders({
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({ jobId: String(jobId) })
+    })
+    const data = await response.json().catch(() => null)
+    if (!data || typeof data !== 'object') {
+      return { ok: false, status: 'error', error: 'Invalid response' }
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: 'error',
+        error: data.error || data.message || `Server error: ${response.status}`,
+        ...data
+      }
+    }
+    return { ok: true, ...data }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, aborted: true }
+    }
+    return { ok: false, status: 'error', error: 'Network error' }
   }
 }
 
@@ -410,5 +468,21 @@ async function downloadZip(sessionId, adIndex) {
   return { zipBlob }
 }
 
-export { startPreview, getJobStatus, generate, generateVideo, fetchVideoStatus, downloadZip, fetchLatestPaid, fetchSecurityConfig, checkUnderConstructionPassword, API_BASE_URL, getLatestPaidPath, NetworkError, ApiError }
+export {
+  startPreview,
+  getJobStatus,
+  generate,
+  generateVideo,
+  fetchVideoStatus,
+  resumeBuilder2Job,
+  buildBuilder2RequestHeaders,
+  downloadZip,
+  fetchLatestPaid,
+  fetchSecurityConfig,
+  checkUnderConstructionPassword,
+  API_BASE_URL,
+  getLatestPaidPath,
+  NetworkError,
+  ApiError
+}
 

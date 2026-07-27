@@ -24,6 +24,9 @@ import {
   formatBuilder2RemainingClock,
   getBuilder2ElapsedSeconds,
   getBuilder2StageLabel,
+  getBuilder2StageProgressFloor,
+  mergeBuilder2ProgressWithStageFloor,
+  BUILDER2_PROGRESS_PENDING_URL_CAP,
   parseBuilder2ProgressTimingFromStatus,
   reconcileBuilder2JobTiming,
   resolveBuilder2JobStartTime,
@@ -91,8 +94,9 @@ assert.equal(earlierAttempt, atTen)
 const stageA = computeBuilder2ProgressPercent(450, 1200, 0)
 const stageB = computeBuilder2ProgressPercent(450, 1200, 0)
 assert.equal(stageA, stageB)
-assert.equal(getBuilder2StageLabel('strategy'), 'מפתח אסטרטגיה')
-assert.equal(getBuilder2StageLabel('runway'), 'יוצר את הווידאו')
+assert.equal(getBuilder2StageLabel('strategy'), 'מגדיר את הבעיה והיתרון היחסי')
+assert.equal(getBuilder2StageLabel('runway_waiting'), 'יוצר את סרטון הווידאו')
+assert.equal(getBuilder2StageLabel('rendering_advertising_closure'), 'מוסיף שם מוצר וסלוגן')
 
 // 11. Slow polling does not freeze progress — RAF uses local elapsed between polls
 assert.match(progressBarSource, /requestAnimationFrame/)
@@ -136,7 +140,8 @@ assert.equal(
 // 15–16. Failure does not reach 100%; timers stop via taskFailed
 assert.ok(computeBuilder2ProgressPercent(800, 1200) < 100)
 assert.match(progressBarSource, /if \(!visible \|\| taskFailed\)/)
-assert.match(builder2PageSource, /stopProgressWithFailure/)
+assert.match(builder2PageSource, /handleFailureFromStatus/)
+assert.match(builder2PageSource, /stopProgressUi/)
 
 // 17. Post-estimate crawl capped at 99.5
 assert.ok(computeBuilder2ProgressPercent(1200, 1200) <= 97.01)
@@ -181,8 +186,13 @@ assert.deepEqual(parseBuilder2ProgressTimingFromStatus({ status: 'running' }), {
 
 // Component wiring
 assert.match(productForm2Source, /Builder2ProgressBar/)
-assert.match(builder2PageSource, /reconcileBuilder2JobTiming/)
 assert.match(builder2PageSource, /applyPollProgressTiming/)
+assert.match(builder2PageSource, /reconcileBuilder2JobTiming/)
+assert.match(builder2PageSource, /ensureBuilder2OwnerContext/)
+assert.match(builder2PageSource, /resumeBuilder2Job/)
+assert.match(builder2PageSource, /BUILDER2_MSG_NEW_VIDEO/)
+assert.doesNotMatch(builder2PageSource, /buildDemoVideoResult/)
+assert.doesNotMatch(builder2PageSource, /isDemoMode/)
 assert.match(progressBarSource, /progressTiming/)
 assert.match(progressBarSource, /progressStageLabel/)
 assert.doesNotMatch(builder2PageSource, /Builder1ProgressBar/)
@@ -198,5 +208,14 @@ assert.match(
 assert.match(productForm2Source, /productName-b2/)
 assert.match(productForm2Source, /productDescription-b2/)
 assert.match(productForm2Source, /Product description is required/)
+
+// Stage floors smooth upward only
+assert.equal(getBuilder2StageProgressFloor('runway_waiting'), 86)
+const merged = mergeBuilder2ProgressWithStageFloor(20, 86, 80)
+assert.ok(merged >= 80)
+assert.ok(merged <= 86)
+
+// Pending URL cap below 100
+assert.ok(BUILDER2_PROGRESS_PENDING_URL_CAP === 99)
 
 console.log('builder2 progress tests passed')
