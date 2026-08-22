@@ -13,14 +13,22 @@
   background: transparent;
 }
 
+.uc-page {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
 .uc-image-block {
-  position: absolute;
-  left: 50%;
-  top: calc(50% - 20px);
-  transform: translate(-50%, -50%);
+  position: relative;
   display: inline-block;
   line-height: 0;
   pointer-events: auto;
+  flex: 0 0 auto;
 }
 
 .opening-hero-column {
@@ -50,8 +58,8 @@
   display: block;
   margin: 0;
   padding: 0;
-  width: auto;
-  height: auto;
+  width: 258px;
+  height: 402px;
   max-width: none;
   max-height: none;
 }
