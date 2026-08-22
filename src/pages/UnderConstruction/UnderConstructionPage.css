@@ -3,6 +3,11 @@
   display: none;
 }
 
+/* Opening screen only: hide global Footer */
+.app--opening-screen > .footer {
+  display: none;
+}
+
 .under-construction-header-spacer {
   flex-shrink: 0;
   height: 69px;
@@ -57,7 +62,7 @@
   margin: 0;
   padding: 0;
   width: 258px;
-  height: 467px;
+  height: 667px;
   max-width: none;
   max-height: none;
 }
