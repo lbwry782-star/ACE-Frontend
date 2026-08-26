@@ -261,6 +261,11 @@ function Builder2Page() {
     setProgressStageLabel('')
   }, [])
 
+  const stopPolling = useCallback(() => {
+    pollAbortRef.current?.abort()
+    pollGenerationRef.current += 1
+  }, [])
+
   const showCompletedResult = useCallback(
     (statusPayload, jobId, { immediate = false } = {}) => {
       const built = buildBuilder2VideoResult(statusPayload, generateMarketingText)
@@ -519,11 +524,6 @@ function Builder2Page() {
     },
     [runPollLoop]
   )
-
-  const stopPolling = useCallback(() => {
-    pollAbortRef.current?.abort()
-    pollGenerationRef.current += 1
-  }, [])
 
   useEffect(() => {
     return () => {

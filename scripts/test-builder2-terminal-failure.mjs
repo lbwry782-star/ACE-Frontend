@@ -153,4 +153,14 @@ assert.equal(BUILDER2_CURRENT_JOB_STORAGE_KEY, 'ace.builder2.currentJob.v1')
 // 16. Resume API still exists for recoverable architecture
 assert.match(apiSource, /builder2-resume/)
 
+// 17. Regression: stopPolling must initialize before releasePersistedJobAssociation (TDZ)
+const stopPollingDecl = builder2PageSource.indexOf('const stopPolling = useCallback')
+const releaseDecl = builder2PageSource.indexOf('const releasePersistedJobAssociation = useCallback')
+assert.ok(stopPollingDecl > 0, 'stopPolling declaration missing')
+assert.ok(releaseDecl > 0, 'releasePersistedJobAssociation declaration missing')
+assert.ok(
+  stopPollingDecl < releaseDecl,
+  'stopPolling must be declared before releasePersistedJobAssociation to avoid TDZ on mount'
+)
+
 console.log('builder2 terminal failure tests passed')
