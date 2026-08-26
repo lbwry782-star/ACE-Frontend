@@ -163,4 +163,18 @@ assert.ok(
   'stopPolling must be declared before releasePersistedJobAssociation to avoid TDZ on mount'
 )
 
+// 18. Form draft is not restored after refresh; mount clears legacy draft
+assert.doesNotMatch(builder2PageSource, /readBuilder2FormDraft/)
+assert.doesNotMatch(builder2PageSource, /writeBuilder2FormDraft/)
+assert.match(builder2PageSource, /EMPTY_FORM_DATA/)
+assert.match(
+  builder2PageSource.match(/isBuilder2TerminalNonRecoverableFailure\(st\)[\s\S]{0,300}/)?.[0] ??
+    '',
+  /resetFreshFormFields/
+)
+assert.match(
+  builder2PageSource.match(/handleDismissFailure[\s\S]{0,300}/)?.[0] ?? '',
+  /resetFreshFormFields/
+)
+
 console.log('builder2 terminal failure tests passed')

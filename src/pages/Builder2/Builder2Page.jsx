@@ -12,11 +12,7 @@ import {
   clearBuilder2CurrentJob,
   updateBuilder2CurrentJobFromStatus
 } from '../../utils/builder2JobPersistence'
-import {
-  readBuilder2FormDraft,
-  writeBuilder2FormDraft,
-  clearBuilder2FormDraft
-} from '../../utils/builder2FormDraft'
+import { clearBuilder2FormDraft } from '../../utils/builder2FormDraft'
 import {
   BUILDER2_MSG_RESTORING,
   BUILDER2_MSG_DISCONNECTED,
@@ -51,16 +47,9 @@ const STATE = {
   SUCCESS: 'SUCCESS'
 }
 
-function readInitialFormState() {
-  const draft = readBuilder2FormDraft()
-  return {
-    formData: {
-      productName: draft?.productName ?? '',
-      productDescription: draft?.productDescription ?? ''
-    },
-    isProductNameAuto: Boolean(draft?.isProductNameAuto),
-    canonicalResolvedProductName: draft?.canonicalResolvedProductName ?? null
-  }
+const EMPTY_FORM_DATA = {
+  productName: '',
+  productDescription: ''
 }
 
 function getInterruptCode(st) {
@@ -122,7 +111,6 @@ function extractResolvedProductName(payload) {
 }
 
 function Builder2Page() {
-  const initial = readInitialFormState()
   const [state, setState] = useState(STATE.IDLE)
   const [restorePhase, setRestorePhase] = useState('checking')
   const [videoResult, setVideoResult] = useState(null)
@@ -131,11 +119,9 @@ function Builder2Page() {
   const [errorMessage, setErrorMessage] = useState(null)
   const [errorPanelTitle, setErrorPanelTitle] = useState('Generation failed')
   const [isDisconnected, setIsDisconnected] = useState(false)
-  const [formData, setFormData] = useState(initial.formData)
-  const [isProductNameAuto, setIsProductNameAuto] = useState(initial.isProductNameAuto)
-  const [canonicalResolvedProductName, setCanonicalResolvedProductName] = useState(
-    initial.canonicalResolvedProductName
-  )
+  const [formData, setFormData] = useState(EMPTY_FORM_DATA)
+  const [isProductNameAuto, setIsProductNameAuto] = useState(false)
+  const [canonicalResolvedProductName, setCanonicalResolvedProductName] = useState(null)
   const [progressActive, setProgressActive] = useState(false)
   const [progressKey, setProgressKey] = useState(0)
   const [showProgressBar, setShowProgressBar] = useState(false)
@@ -152,39 +138,22 @@ function Builder2Page() {
   const progressActiveJobIdRef = useRef(null)
   const progressJobStartMsRef = useRef(null)
   const pendingVideoResultRef = useRef(null)
-  const lockedResolvedNameRef = useRef(initial.canonicalResolvedProductName)
+  const lockedResolvedNameRef = useRef(null)
   const fillingResolvedNameRef = useRef(false)
   const userLeftProductNameEmptyRef = useRef(false)
   const hadConfirmedRunningRef = useRef(false)
-  const skipDraftPersistRef = useRef(true)
-
-  const persistFormDraft = useCallback(
-    (nextFormData, extras = {}) => {
-      writeBuilder2FormDraft({
-        productName: nextFormData.productName,
-        productDescription: nextFormData.productDescription,
-        isProductNameAuto:
-          extras.isProductNameAuto !== undefined ? extras.isProductNameAuto : isProductNameAuto,
-        canonicalResolvedProductName:
-          extras.canonicalResolvedProductName !== undefined
-            ? extras.canonicalResolvedProductName
-            : canonicalResolvedProductName
-      })
-    },
-    [isProductNameAuto, canonicalResolvedProductName]
-  )
 
   useEffect(() => {
-    skipDraftPersistRef.current = false
+    clearBuilder2FormDraft()
   }, [])
 
-  useEffect(() => {
-    if (skipDraftPersistRef.current || fillingResolvedNameRef.current) {
-      fillingResolvedNameRef.current = false
-      return
-    }
-    persistFormDraft(formData)
-  }, [formData, persistFormDraft])
+  const resetFreshFormFields = useCallback(() => {
+    clearBuilder2FormDraft()
+    lockedResolvedNameRef.current = null
+    setFormData(EMPTY_FORM_DATA)
+    setIsProductNameAuto(false)
+    setCanonicalResolvedProductName(null)
+  }, [])
 
   const tryApplyResolvedProductName = useCallback(
     (payload) => {
@@ -196,10 +165,6 @@ function Builder2Page() {
         setCanonicalResolvedProductName(lockedResolvedNameRef.current)
         setFormData((prev) => {
           const next = { ...prev, productName: lockedResolvedNameRef.current }
-          persistFormDraft(next, {
-            isProductNameAuto: true,
-            canonicalResolvedProductName: lockedResolvedNameRef.current
-          })
           return next
         })
         setIsProductNameAuto(true)
@@ -210,12 +175,11 @@ function Builder2Page() {
       setCanonicalResolvedProductName(name)
       setFormData((prev) => {
         const next = { ...prev, productName: name }
-        persistFormDraft(next, { isProductNameAuto: true, canonicalResolvedProductName: name })
         return next
       })
       setIsProductNameAuto(true)
     },
-    [persistFormDraft]
+    []
   )
 
   const applyPollProgressTiming = useCallback((jobId, statusPayload) => {
@@ -355,16 +319,18 @@ function Builder2Page() {
     const jobId =
       failureInfo?.jobId ?? activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId ?? null
     releasePersistedJobAssociation(jobId)
+    resetFreshFormFields()
     setFailureInfo(null)
     setState(STATE.IDLE)
-  }, [failureInfo, releasePersistedJobAssociation])
+  }, [failureInfo, releasePersistedJobAssociation, resetFreshFormFields])
 
   const handleDismissOwnershipError = useCallback(() => {
     const jobId = activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId ?? null
     releasePersistedJobAssociation(jobId)
+    resetFreshFormFields()
     setOwnershipError(null)
     setState(STATE.IDLE)
-  }, [releasePersistedJobAssociation])
+  }, [releasePersistedJobAssociation, resetFreshFormFields])
 
   const processStatusPayload = useCallback(
     async (jobId, statusPayload, { fromRestore = false } = {}) => {
@@ -550,6 +516,7 @@ function Builder2Page() {
 
       if (isBuilder2TerminalNonRecoverableFailure(st)) {
         releasePersistedJobAssociation(jobId)
+        resetFreshFormFields()
         setFailureInfo(null)
         setOwnershipError(null)
         setIsDisconnected(false)
@@ -581,7 +548,7 @@ function Builder2Page() {
     return () => {
       cancelled = true
     }
-  }, [beginProgress, processStatusPayload, releasePersistedJobAssociation, startPolling])
+  }, [beginProgress, processStatusPayload, releasePersistedJobAssociation, resetFreshFormFields, startPolling])
 
   const handleSubmit = async (data) => {
     if (submitInFlightRef.current || readBuilder2CurrentJob()?.jobId) {
@@ -601,13 +568,6 @@ function Builder2Page() {
     setErrorMessage(null)
     setErrorPanelTitle('Generation failed')
     hadConfirmedRunningRef.current = false
-
-    persistFormDraft(data, {
-      isProductNameAuto: userLeftProductNameEmptyRef.current ? isProductNameAuto : false,
-      canonicalResolvedProductName: userLeftProductNameEmptyRef.current
-        ? canonicalResolvedProductName
-        : null
-    })
 
     try {
       const start = await generateVideo({
@@ -662,7 +622,7 @@ function Builder2Page() {
       clearBuilder2JobStartTime(jobId)
     }
     clearBuilder2CurrentJob()
-    clearBuilder2FormDraft()
+    resetFreshFormFields()
     activeJobIdRef.current = null
     progressActiveJobIdRef.current = null
     progressJobStartMsRef.current = null
@@ -677,9 +637,6 @@ function Builder2Page() {
     setErrorMessage(null)
     setIsDisconnected(false)
     setState(STATE.IDLE)
-    setIsProductNameAuto(false)
-    setCanonicalResolvedProductName(null)
-    setFormData({ productName: '', productDescription: '' })
     stopProgressUi()
     setProgressTiming(null)
   }

@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   BUILDER2_FORM_DRAFT_STORAGE_KEY,
-  readBuilder2FormDraft,
   writeBuilder2FormDraft,
   clearBuilder2FormDraft
 } from '../src/utils/builder2FormDraft.js'
@@ -54,17 +53,17 @@ assert.doesNotMatch(productForm2Source, /Builder2ProgressBar/)
 assert.match(builder2PageSource, /builder2-progress-section/)
 assert.match(builder2PageSource, /builder-results/)
 
-// 7. Submitted text values survive refresh
+// 7. Form fields start empty; legacy draft is not restored on mount
 assert.equal(BUILDER2_FORM_DRAFT_STORAGE_KEY, 'ace.builder2.formDraft.v1')
 writeBuilder2FormDraft(
   { productName: 'Ace Shoe', productDescription: 'Comfortable running shoe' },
   storage
 )
-const draft = readBuilder2FormDraft(storage)
-assert.equal(draft?.productName, 'Ace Shoe')
-assert.equal(draft?.productDescription, 'Comfortable running shoe')
-assert.match(builder2PageSource, /readBuilder2FormDraft/)
-assert.match(builder2PageSource, /writeBuilder2FormDraft/)
+assert.doesNotMatch(builder2PageSource, /readBuilder2FormDraft/)
+assert.doesNotMatch(builder2PageSource, /writeBuilder2FormDraft/)
+assert.match(builder2PageSource, /EMPTY_FORM_DATA/)
+assert.match(builder2PageSource, /useState\(EMPTY_FORM_DATA\)/)
+assert.match(builder2PageSource, /clearBuilder2FormDraft\(\)/)
 clearBuilder2FormDraft(storage)
 
 // 8. Active job cannot duplicate submit
@@ -105,14 +104,11 @@ assert.doesNotMatch(
   /builder2_/
 )
 
-// 16–18. Failed/completed do not clear form draft automatically
-assert.doesNotMatch(
-  builder2PageSource.match(/handleFailureFromStatus[\s\S]*?\}, \[stopProgressUi\]/)?.[0] ?? '',
-  /clearBuilder2FormDraft|setFormData\(\{ productName: ''/
-)
-assert.doesNotMatch(
-  builder2PageSource.match(/handleProgressRevealReady[\s\S]*?\}, \[stopProgressUi\]/)?.[0] ?? '',
-  /clearBuilder2FormDraft|setFormData\(\{ productName: ''/
+// 16–18. Dismiss / new video / mount reset form to empty fresh state
+assert.match(builder2PageSource, /resetFreshFormFields/)
+assert.match(
+  builder2PageSource.match(/handleDismissFailure[\s\S]{0,400}/)?.[0] ?? '',
+  /resetFreshFormFields/
 )
 assert.match(builder2PageSource, /handleStartNewVideo/)
 assert.match(builder2PageSource, /clearBuilder2FormDraft/)
