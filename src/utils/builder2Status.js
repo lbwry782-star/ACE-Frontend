@@ -96,6 +96,32 @@ export function canBuilder2StatusResume(payload) {
 }
 
 /**
+ * Terminal failure with no automatic continuation — safe to release frontend job pointer.
+ * Active, completed, recoverable, and transient poll errors are excluded.
+ * @param {object|null|undefined} payload
+ */
+export function isBuilder2TerminalNonRecoverableFailure(payload) {
+  if (!payload || typeof payload !== 'object') return false
+
+  if (isBuilder2ResumeAlreadyInProgress(payload)) return false
+  if (isBuilder2StatusRunning(payload)) return false
+  if (isBuilder2StatusCompleted(payload)) return false
+  if (canBuilder2StatusResume(payload)) return false
+
+  const status = normalizeBuilder2Status(payload)
+  if (status === 'error' && isTransientBuilder2PollFailure(payload)) {
+    return false
+  }
+
+  if (getBuilder2OwnershipErrorCode(payload)) return true
+  if (isBuilder2StatusFailed(payload)) return true
+  if (status === 'interrupted') return true
+  if (status === 'error') return true
+
+  return false
+}
+
+/**
  * @param {object|null|undefined} payload
  */
 export function isBuilder2ResumeAlreadyInProgress(payload) {

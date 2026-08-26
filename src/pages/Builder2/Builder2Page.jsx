@@ -26,6 +26,7 @@ import {
   isBuilder2StatusCompleted,
   isBuilder2StatusRunning,
   isBuilder2StatusFailed,
+  isBuilder2TerminalNonRecoverableFailure,
   isBuilder2ResumeAlreadyInProgress,
   getBuilder2OwnershipErrorCode,
   getBuilder2SafeFailureMessage,
@@ -328,6 +329,38 @@ function Builder2Page() {
     [stopProgressUi]
   )
 
+  const releasePersistedJobAssociation = useCallback(
+    (jobId) => {
+      stopPolling()
+      if (jobId) {
+        clearBuilder2JobStartTime(jobId)
+      }
+      clearBuilder2CurrentJob()
+      activeJobIdRef.current = null
+      progressActiveJobIdRef.current = null
+      progressJobStartMsRef.current = null
+      submitInFlightRef.current = false
+      stopProgressUi()
+      setProgressTiming(null)
+    },
+    [stopPolling, stopProgressUi]
+  )
+
+  const handleDismissFailure = useCallback(() => {
+    const jobId =
+      failureInfo?.jobId ?? activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId ?? null
+    releasePersistedJobAssociation(jobId)
+    setFailureInfo(null)
+    setState(STATE.IDLE)
+  }, [failureInfo, releasePersistedJobAssociation])
+
+  const handleDismissOwnershipError = useCallback(() => {
+    const jobId = activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId ?? null
+    releasePersistedJobAssociation(jobId)
+    setOwnershipError(null)
+    setState(STATE.IDLE)
+  }, [releasePersistedJobAssociation])
+
   const processStatusPayload = useCallback(
     async (jobId, statusPayload, { fromRestore = false } = {}) => {
       if (!jobId || !statusPayload) return 'continue'
@@ -512,9 +545,20 @@ function Builder2Page() {
     progressActiveJobIdRef.current = jobId
 
     ;(async () => {
+      const st = await fetchVideoStatus(jobId)
+      if (cancelled) return
+
+      if (isBuilder2TerminalNonRecoverableFailure(st)) {
+        releasePersistedJobAssociation(jobId)
+        setFailureInfo(null)
+        setOwnershipError(null)
+        setIsDisconnected(false)
+        setState(STATE.IDLE)
+        setRestorePhase('done')
+        return
+      }
+
       if (persisted.completed) {
-        const st = await fetchVideoStatus(jobId)
-        if (cancelled) return
         if (isValidBuilder2VideoUrl(resolveBuilder2FinalVideoUrl(st))) {
           const built = buildBuilder2VideoResult(st, generateMarketingText)
           setVideoResult(built)
@@ -527,9 +571,6 @@ function Builder2Page() {
         return
       }
 
-      const st = await fetchVideoStatus(jobId)
-      if (cancelled) return
-
       const outcome = await processStatusPayload(jobId, st, { fromRestore: true })
       if (outcome !== 'terminal' && outcome !== 'stale') {
         startPolling(jobId)
@@ -540,7 +581,7 @@ function Builder2Page() {
     return () => {
       cancelled = true
     }
-  }, [beginProgress, processStatusPayload, startPolling])
+  }, [beginProgress, processStatusPayload, releasePersistedJobAssociation, startPolling])
 
   const handleSubmit = async (data) => {
     if (submitInFlightRef.current || readBuilder2CurrentJob()?.jobId) {
@@ -724,7 +765,7 @@ function Builder2Page() {
       {ownershipError ? (
         <ErrorPanel
           error={ownershipError}
-          onRetry={() => setOwnershipError(null)}
+          onRetry={handleDismissOwnershipError}
           buttonLabel="Dismiss"
           title="Cannot restore job"
         />
@@ -734,7 +775,7 @@ function Builder2Page() {
         <div className="builder2-failure-panel" dir="rtl">
           <ErrorPanel
             error={failureInfo.message}
-            onRetry={() => setFailureInfo(null)}
+            onRetry={handleDismissFailure}
             buttonLabel="Dismiss"
             title="Generation failed"
           />
