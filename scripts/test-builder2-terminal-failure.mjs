@@ -19,6 +19,7 @@ import {
   isBuilder2TerminalNonRecoverableFailure,
   isTransientBuilder2PollFailure
 } from '../src/utils/builder2Status.js'
+import { clearBuilder2ActiveJob } from '../src/utils/builder2ActiveJob.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
@@ -43,6 +44,12 @@ class MemoryStorage {
 }
 
 const storage = new MemoryStorage()
+const sessionStorage = new MemoryStorage()
+
+const mountEffect =
+  builder2PageSource.match(
+    /useEffect\(\(\) => \{\r?\n    ensureBuilder2OwnerContext\(\)[\s\S]*?\}, \[resetFreshGenerationUi\]\)/
+  )?.[0] ?? ''
 
 // 1. Status helper: active jobs are not terminal non-recoverable
 assert.ok(isBuilder2StatusRunning({ status: 'running' }))
@@ -54,11 +61,11 @@ assert.ok(!isBuilder2TerminalNonRecoverableFailure({ status: 'processing' }))
 assert.ok(isBuilder2StatusCompleted({ status: 'done' }))
 assert.ok(!isBuilder2TerminalNonRecoverableFailure({ status: 'done' }))
 
-// 3. Recoverable failed jobs stay associated
+// 3. Recoverable failed jobs stay associated (in-session)
 assert.ok(canBuilder2StatusResume({ status: 'failed', canResume: true }))
 assert.ok(!isBuilder2TerminalNonRecoverableFailure({ status: 'failed', canResume: true }))
 
-// 4. Terminal failed jobs are detected
+// 4. Terminal failed jobs are detected (helper still used elsewhere)
 assert.ok(isBuilder2TerminalNonRecoverableFailure({ status: 'failed' }))
 assert.ok(isBuilder2TerminalNonRecoverableFailure({ status: 'error', error: 'permanent' }))
 assert.ok(isBuilder2TerminalNonRecoverableFailure({ status: 'interrupted', interrupt_code: 'x' }))
@@ -70,27 +77,23 @@ assert.ok(
 assert.ok(isTransientBuilder2PollFailure({ status: 'error', error: 'Network error' }))
 assert.ok(!isBuilder2TerminalNonRecoverableFailure({ status: 'error', error: 'Network error' }))
 
-// 6. Refresh restore clears terminal failure pointer (frontend only)
-assert.match(builder2PageSource, /isBuilder2TerminalNonRecoverableFailure/)
+// 6. Refresh mount cancels active session job — no terminal-failure restore branch
+assert.doesNotMatch(builder2PageSource, /isBuilder2TerminalNonRecoverableFailure/)
 assert.match(builder2PageSource, /releasePersistedJobAssociation/)
-const restoreBlock =
-  builder2PageSource.match(
-    /if \(isBuilder2TerminalNonRecoverableFailure\(st\)\) \{[\s\S]*?return/
-  )?.[0] ?? ''
-assert.match(restoreBlock, /releasePersistedJobAssociation/)
+assert.match(mountEffect, /cancelBuilder2Job/)
+assert.doesNotMatch(mountEffect, /isBuilder2TerminalNonRecoverableFailure/)
+assert.doesNotMatch(mountEffect, /generateVideo|resumeBuilder2Job/)
+
 const releaseBlock =
   builder2PageSource.match(
     /const releasePersistedJobAssociation = useCallback\([\s\S]*?\n  \)/,
   )?.[0] ?? ''
 assert.match(releaseBlock, /clearBuilder2CurrentJob/)
-assert.doesNotMatch(restoreBlock, /generateVideo|resumeBuilder2Job/)
+assert.match(releaseBlock, /clearBuilder2ActiveJob/)
 
-// 7. Active refresh still polls — no auto-clear for running jobs
+// 7. Refresh does not resume polling old job
+assert.doesNotMatch(mountEffect, /startPolling/)
 assert.match(builder2PageSource, /startPolling\(jobId\)/)
-assert.doesNotMatch(
-  builder2PageSource.match(/isBuilder2TerminalNonRecoverableFailure[\s\S]{0,200}/)?.[0] ?? '',
-  /generateVideo/
-)
 
 // 8. Dismiss clears persisted frontend association
 assert.match(builder2PageSource, /handleDismissFailure/)
@@ -106,38 +109,33 @@ assert.doesNotMatch(
   /generateVideo|resumeBuilder2Job/
 )
 
-// 9. Direct /builder2 without persisted job stays fresh
+// 9. Direct /builder2 without active session job stays fresh
 clearBuilder2CurrentJob(storage)
+clearBuilder2ActiveJob(sessionStorage)
 assert.equal(readBuilder2CurrentJob(storage), null)
-assert.match(builder2PageSource, /if \(!persisted\?\.jobId\)/)
+assert.match(mountEffect, /if \(!activeJob\?\.jobId\)/)
 
-// 10. Clearing terminal failure does not delete backend — no delete API in dismiss/restore
-assert.doesNotMatch(restoreBlock, /DELETE|deleteJob|removeJob/)
+// 10. Clearing failure does not delete backend — no delete API in dismiss/mount
+assert.doesNotMatch(mountEffect, /DELETE|deleteJob|removeJob/)
 assert.doesNotMatch(releaseBlock, /DELETE|deleteJob|removeJob/)
 assert.doesNotMatch(
   builder2PageSource.match(/handleDismissFailure[\s\S]{0,400}/)?.[0] ?? '',
   /DELETE|deleteJob|removeJob/
 )
 
-// 11. Completed refresh path preserved
-assert.match(builder2PageSource, /persisted\.completed/)
+// 11. In-session completion path preserved
 assert.match(builder2PageSource, /buildBuilder2VideoResult/)
+assert.doesNotMatch(mountEffect, /buildBuilder2VideoResult/)
 
-// 12. New video path still clears only frontend state
-assert.match(builder2PageSource, /handleStartNewVideo/)
-assert.doesNotMatch(
-  builder2PageSource.match(/handleStartNewVideo[\s\S]*?\n  \}/)?.[0] ?? '',
-  /generateVideo|resumeBuilder2Job/
-)
+// 12. New video button removed — refresh is reset mechanism
+assert.doesNotMatch(builder2PageSource, /handleStartNewVideo/)
+assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_NEW_VIDEO/)
 
 // 13. Builder1 unchanged
 assert.doesNotMatch(builder1PageSource, /isBuilder2TerminalNonRecoverableFailure|handleDismissFailure/)
 
 // 14. Paid-call safety on refresh/dismiss paths
-const restoreEffect =
-  builder2PageSource.match(/useEffect\(\(\) => \{[\s\S]*?ensureBuilder2OwnerContext[\s\S]*?\}, \[/)?.[0] ??
-  ''
-assert.doesNotMatch(restoreEffect, /generateVideo/)
+assert.doesNotMatch(mountEffect, /generateVideo/)
 assert.doesNotMatch(
   builder2PageSource.match(/handleDismissFailure[\s\S]{0,400}/)?.[0] ?? '',
   /generateVideo|resumeBuilder2Job/
@@ -168,13 +166,15 @@ assert.doesNotMatch(builder2PageSource, /readBuilder2FormDraft/)
 assert.doesNotMatch(builder2PageSource, /writeBuilder2FormDraft/)
 assert.match(builder2PageSource, /EMPTY_FORM_DATA/)
 assert.match(
-  builder2PageSource.match(/isBuilder2TerminalNonRecoverableFailure\(st\)[\s\S]{0,300}/)?.[0] ??
-    '',
-  /resetFreshFormFields/
-)
-assert.match(
   builder2PageSource.match(/handleDismissFailure[\s\S]{0,300}/)?.[0] ?? '',
   /resetFreshFormFields/
+)
+assert.match(mountEffect, /resetFreshGenerationUi/)
+
+// 19. Failure during session clears active job marker
+assert.match(
+  builder2PageSource.match(/handleFailureFromStatus[\s\S]{0,500}/)?.[0] ?? '',
+  /clearBuilder2ActiveJob/
 )
 
 console.log('builder2 terminal failure tests passed')

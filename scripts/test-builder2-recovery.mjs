@@ -22,6 +22,12 @@ import {
   parseBuilder2CurrentJobRecord
 } from '../src/utils/builder2JobPersistence.js'
 import {
+  BUILDER2_ACTIVE_JOB_SESSION_KEY,
+  readBuilder2ActiveJob,
+  writeBuilder2ActiveJob,
+  clearBuilder2ActiveJob
+} from '../src/utils/builder2ActiveJob.js'
+import {
   resolveBuilder2FinalVideoUrl,
   canBuilder2StatusResume,
   isBuilder2ResumeAlreadyInProgress,
@@ -29,9 +35,9 @@ import {
   isTransientBuilder2PollFailure,
   getBuilder2OwnershipErrorCode,
   buildBuilder2VideoResult,
-  BUILDER2_MSG_RESTORING,
+  BUILDER2_MSG_CANCELLING,
   BUILDER2_MSG_DISCONNECTED,
-  BUILDER2_MSG_NEW_VIDEO
+  isBuilder2CancelAcknowledged
 } from '../src/utils/builder2Status.js'
 import {
   reconcileBuilder2JobTiming,
@@ -68,10 +74,16 @@ class MemoryStorage {
 }
 
 const storage = new MemoryStorage()
+const sessionStorage = new MemoryStorage()
 
 function approx(actual, expected, tolerance = 0.05) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `expected ~${expected}, got ${actual}`)
 }
+
+const mountEffect =
+  builder2PageSource.match(
+    /useEffect\(\(\) => \{\r?\n    ensureBuilder2OwnerContext\(\)[\s\S]*?\}, \[resetFreshGenerationUi\]\)/
+  )?.[0] ?? ''
 
 // 1. Stable owner context survives refresh
 const first = ensureBuilder2OwnerContext(storage)
@@ -79,17 +91,17 @@ const second = ensureBuilder2OwnerContext(storage)
 assert.equal(first.ownerId, second.ownerId)
 assert.equal(readBuilder2OwnerContext(storage)?.ownerId, first.ownerId)
 
-// 2. Owner header identical on create/status/resume wiring
+// 2. Owner header identical on create/status/cancel wiring
 assert.match(apiSource, /buildBuilder2RequestHeaders/)
 assert.match(apiSource, /generateVideo[\s\S]*buildBuilder2RequestHeaders/)
 assert.match(apiSource, /fetchVideoStatus[\s\S]*buildBuilder2RequestHeaders/)
-assert.match(apiSource, /resumeBuilder2Job[\s\S]*buildBuilder2RequestHeaders/)
+assert.match(apiSource, /cancelBuilder2Job[\s\S]*buildBuilder2RequestHeaders/)
 const headerA = getBuilder2OwnerBatchStateHeader(storage)
 const headerB = getBuilder2OwnerBatchStateHeader(storage)
 assert.equal(headerA, headerB)
 assert.doesNotMatch(headerA, /productName|description/i)
 
-// 3. jobId persists immediately after creation
+// 3. jobId persists immediately after creation (in-session localStorage)
 clearBuilder2CurrentJob(storage)
 const job = writeBuilder2CurrentJob(
   { jobId: 'job-123', createdAt: '2026-01-01T00:00:00.000Z' },
@@ -99,19 +111,20 @@ assert.equal(job?.jobId, 'job-123')
 assert.equal(readBuilder2CurrentJob(storage)?.jobId, 'job-123')
 assert.match(builder2PageSource, /writeBuilder2CurrentJob/)
 
-// 4–6. Refresh restore wiring (active/completed/failed resumable)
-assert.match(builder2PageSource, /readBuilder2CurrentJob/)
-assert.match(builder2PageSource, /BUILDER2_MSG_RESTORING/)
-assert.match(builder2PageSource, /restorePhase/)
+// 4–6. Refresh cancels active session job instead of restoring UI
+assert.match(builder2PageSource, /readBuilder2ActiveJob/)
+assert.match(builder2PageSource, /BUILDER2_MSG_CANCELLING/)
+assert.match(builder2PageSource, /cancellationGate/)
+assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESTORING/)
+assert.doesNotMatch(builder2PageSource, /restorePhase/)
 assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESUME/)
 assert.doesNotMatch(builder2PageSource, /builder2-resume-button/)
 
 // 7. Refresh never submits generate-video automatically
 assert.match(builder2PageSource, /readBuilder2CurrentJob\(\)\?\.jobId/)
-const restoreEffect = builder2PageSource.match(/useEffect\(\(\) => \{[\s\S]*?ensureBuilder2OwnerContext[\s\S]*?\}, \[/)?.[0] ?? ''
-assert.doesNotMatch(restoreEffect, /generateVideo/)
+assert.doesNotMatch(mountEffect, /generateVideo/)
 
-// 8–9. Network disconnect retains job and reconnect polls only
+// 8–9. Network disconnect retains job and reconnect polls only (same session)
 assert.match(builder2PageSource, /BUILDER2_MSG_DISCONNECTED/)
 assert.match(builder2PageSource, /isTransientBuilder2PollFailure/)
 assert.doesNotMatch(
@@ -119,16 +132,15 @@ assert.doesNotMatch(
   /generateVideo|resumeBuilder2Job/
 )
 
-// 10–12. Resume API remains; page keeps import for internal architecture
+// 10–12. Resume API remains in api.js; page no longer imports resumeBuilder2Job
 assert.match(apiSource, /builder2-resume/)
 assert.match(apiSource, /jobId: String\(jobId\)/)
-assert.match(builder2PageSource, /resumeBuilder2Job/)
+assert.doesNotMatch(builder2PageSource, /resumeBuilder2Job/)
 assert.doesNotMatch(builder2PageSource, /handleResume/)
 
-// 13–14. resumeAlreadyInProgress continues polling silently
+// 13–14. resumeAlreadyInProgress continues polling silently (in-session)
 assert.match(builder2PageSource, /isBuilder2ResumeAlreadyInProgress/)
 assert.ok(isBuilder2ResumeAlreadyInProgress({ resumeAlreadyInProgress: true }))
-assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESUME_IN_PROGRESS/)
 
 // 15. Completed result path supports immediate reveal option
 assert.match(builder2PageSource, /immediate\s*=\s*false/)
@@ -142,7 +154,7 @@ assert.doesNotMatch(
   /generateVideo/
 )
 
-// 17–18. progressStartedAt survives refresh; resume does not reset elapsed
+// 17–18. progressStartedAt survives in-session timing; refresh mount resets UI
 clearAllBuilder2JobStartTimes()
 const startedAtIso = '2026-01-01T00:00:00.000Z'
 const timing = reconcileBuilder2JobTiming('job-elapsed', {
@@ -155,11 +167,12 @@ const afterRefresh = reconcileBuilder2JobTiming('job-elapsed', {
 })
 assert.equal(afterRefresh.startMs, timing.startMs)
 approx(getBuilder2ElapsedSeconds(afterRefresh, timing.serverElapsedAtMs + 60_000), 960, 2)
+assert.match(mountEffect, /resetFreshGenerationUi/)
 
 // 19. LTR fill in RTL page wiring preserved
 assert.match(readFileSync(join(root, 'src/components/ProgressBar/builder2-progress.css'), 'utf8'), /direction:\s*ltr/)
 
-// 20–21. Progress never 100% without URL; completed without URL stays at 99%
+// 20–21. Progress never 100% without URL; completed without URL stays capped
 assert.ok(
   resolveBuilder2ProgressFrame({ elapsedSeconds: 5000, previousPercent: 0, pendingFinalUrl: true }) <=
     BUILDER2_PROGRESS_PENDING_URL_CAP
@@ -184,7 +197,7 @@ assert.equal(onlyRunway, 'https://runway.example/raw.mp4')
 assert.equal(getBuilder2StageLabel('advertising_closure'), 'מכין את הסגירה הפרסומית')
 assert.equal(getBuilder2StageLabel('rendering_advertising_closure'), 'מוסיף שם מוצר וסלוגן')
 
-// 25–26. Video player + download after refresh
+// 25–26. Video player + download after in-session completion
 assert.match(builder2PageSource, /videoResult/)
 assert.match(videoAdCardSource, /DOWNLOAD ZIP/)
 assert.match(builder2PageSource, /onPlaybackError/)
@@ -193,14 +206,11 @@ assert.match(builder2PageSource, /onPlaybackError/)
 assert.match(builder2PageSource, /handlePlaybackError/)
 assert.match(builder2PageSource, /fetchVideoStatus\(jobId\)/)
 
-// 28–29. New video clears job only; no job until submit
+// 28–29. Refresh clears in-session job; active job marker in sessionStorage
 assert.match(builder2PageSource, /clearBuilder2CurrentJob/)
-assert.match(builder2PageSource, /BUILDER2_MSG_NEW_VIDEO/)
-assert.match(builder2PageSource, /handleStartNewVideo/)
-assert.doesNotMatch(
-  builder2PageSource.match(/handleStartNewVideo[\s\S]*?\n  \}/)?.[0] ?? '',
-  /generateVideo/
-)
+assert.match(builder2PageSource, /writeBuilder2ActiveJob/)
+assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_NEW_VIDEO/)
+assert.doesNotMatch(builder2PageSource, /handleStartNewVideo/)
 
 // 30. Malformed persistent state ignored safely
 storage.setItem(BUILDER2_CURRENT_JOB_STORAGE_KEY, '{bad json')
@@ -214,14 +224,21 @@ assert.match(builder2PageSource, /responseJobId && responseJobId !== jobId/)
 assert.match(builder2PageSource, /persisted\?\.jobId && persisted\.jobId !== jobId/)
 
 // 33. Builder1 unchanged
-assert.doesNotMatch(builder1PageSource, /builder2JobPersistence|builder2OwnerContext|builder2-resume/i)
+assert.doesNotMatch(builder1PageSource, /builder2JobPersistence|builder2OwnerContext|builder2-resume|builder2ActiveJob/i)
 
 // Extra: storage keys + contract version
 assert.equal(BUILDER2_OWNER_CONTEXT_STORAGE_KEY, 'ace.ownerContext.v1')
 assert.equal(BUILDER2_CURRENT_JOB_STORAGE_KEY, 'ace.builder2.currentJob.v1')
+assert.equal(BUILDER2_ACTIVE_JOB_SESSION_KEY, 'ace.builder2.activeJob.v1')
 assert.equal(parseBuilder2CurrentJobRecord({ jobId: 'x', createdAt: 't' })?.builder2ResumeContractVersion, BUILDER2_RESUME_CONTRACT_VERSION)
 
-// Extra: failed resumable retains job record
+// Extra: active job session marker
+writeBuilder2ActiveJob({ jobId: 'job-active' }, sessionStorage)
+assert.equal(readBuilder2ActiveJob(sessionStorage)?.jobId, 'job-active')
+clearBuilder2ActiveJob(sessionStorage)
+assert.equal(readBuilder2ActiveJob(sessionStorage), null)
+
+// Extra: failed resumable retains job record (in-session)
 updateBuilder2CurrentJobFromStatus('job-fail', { status: 'failed', canResume: true }, storage)
 assert.equal(readBuilder2CurrentJob(storage)?.jobId, 'job-fail')
 assert.ok(canBuilder2StatusResume({ status: 'failed', canResume: true }))
@@ -249,8 +266,8 @@ assert.ok(floored >= 35)
 assert.ok(floored <= 40)
 
 // Extra: UI constants present
-assert.equal(BUILDER2_MSG_RESTORING, 'משחזר את העבודה האחרונה…')
+assert.equal(BUILDER2_MSG_CANCELLING, 'מבטל את העבודה הקודמת…')
 assert.equal(BUILDER2_MSG_DISCONNECTED, 'החיבור נותק. העבודה נשמרה וננסה להתחבר מחדש.')
-assert.equal(BUILDER2_MSG_NEW_VIDEO, 'צור סרטון חדש')
+assert.ok(isBuilder2CancelAcknowledged({ ok: true, status: 'cancelled' }))
 
 console.log('builder2 recovery tests passed')

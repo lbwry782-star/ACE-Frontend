@@ -66,8 +66,9 @@ assert.match(builder2PageSource, /useState\(EMPTY_FORM_DATA\)/)
 assert.match(builder2PageSource, /clearBuilder2FormDraft\(\)/)
 clearBuilder2FormDraft(storage)
 
-// 8. Active job cannot duplicate submit
+// 8. Active job + cancellation gate cannot duplicate submit
 assert.match(builder2PageSource, /readBuilder2CurrentJob\(\)\?\.jobId/)
+assert.match(builder2PageSource, /cancellationGate !== 'ready'/)
 assert.match(builder2PageSource, /submitDisabled/)
 
 // 9–10. Progress and result are additive sections
@@ -86,9 +87,11 @@ assert.doesNotMatch(builder2PageSource, /builder2-resume-button/)
 assert.doesNotMatch(builder2PageSource, /BUILDER2_MSG_RESUME/)
 assert.doesNotMatch(productForm2Source, /המשך מאותה נקודה/)
 
-// Backend resume client remains available internally
+// Backend resume client remains available internally; page uses cancel on refresh
 assert.match(apiSource, /resumeBuilder2Job/)
-assert.match(builder2PageSource, /resumeBuilder2Job/)
+assert.match(apiSource, /cancelBuilder2Job/)
+assert.doesNotMatch(builder2PageSource, /resumeBuilder2Job/)
+assert.match(builder2PageSource, /cancelBuilder2Job/)
 
 // 15. Internal failure codes mapped to safe message
 assert.equal(
@@ -104,17 +107,19 @@ assert.doesNotMatch(
   /builder2_/
 )
 
-// 16–18. Dismiss / new video / mount reset form to empty fresh state
+// 16–18. Dismiss / mount reset form to empty fresh state; refresh is reset (no new-video button)
 assert.match(builder2PageSource, /resetFreshFormFields/)
 assert.match(
   builder2PageSource.match(/handleDismissFailure[\s\S]{0,400}/)?.[0] ?? '',
   /resetFreshFormFields/
 )
-assert.match(builder2PageSource, /handleStartNewVideo/)
+assert.match(builder2PageSource, /resetFreshGenerationUi/)
+assert.doesNotMatch(builder2PageSource, /handleStartNewVideo/)
 assert.match(builder2PageSource, /clearBuilder2FormDraft/)
 
-// 19–21. Recovery + polling preserved
+// 19–21. In-session job tracking + polling preserved; refresh cancels instead of restore
 assert.match(builder2PageSource, /readBuilder2CurrentJob/)
+assert.match(builder2PageSource, /readBuilder2ActiveJob/)
 assert.match(builder2PageSource, /pollGenerationRef/)
 assert.match(builder2PageSource, /reconcileBuilder2JobTiming/)
 

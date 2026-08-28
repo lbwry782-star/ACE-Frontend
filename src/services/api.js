@@ -408,6 +408,74 @@ async function fetchVideoStatus(jobId, { signal } = {}) {
 }
 
 /**
+ * POST /api/builder2/jobs/<jobId>/cancel — cancel active Builder2 job (idempotent).
+ */
+function buildBuilder2JobCancelUrl(jobId) {
+  const id = encodeURIComponent(String(jobId ?? '').trim())
+  return `${API_BASE_URL}/api/builder2/jobs/${id}/cancel`
+}
+
+async function cancelBuilder2Job(jobId, { signal, reason = 'frontend_refresh' } = {}) {
+  const trimmed = String(jobId ?? '').trim()
+  if (!trimmed) {
+    return { ok: false, status: 'error', error: 'Missing jobId' }
+  }
+  try {
+    const response = await fetch(buildBuilder2JobCancelUrl(trimmed), {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      signal,
+      headers: buildBuilder2RequestHeaders({
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({ reason })
+    })
+    const data = await response.json().catch(() => null)
+    if (!data || typeof data !== 'object') {
+      return { ok: false, status: 'error', error: 'Invalid response' }
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: 'error',
+        error: data.error || data.message || `Server error: ${response.status}`,
+        ...data
+      }
+    }
+    return { ok: true, ...data }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, aborted: true }
+    }
+    return { ok: false, status: 'error', error: 'Network error' }
+  }
+}
+
+/**
+ * Best-effort cancel during page unload (keepalive — browser may complete after navigation).
+ */
+function cancelBuilder2JobKeepalive(jobId, { reason = 'frontend_refresh' } = {}) {
+  const trimmed = String(jobId ?? '').trim()
+  if (!trimmed) return false
+  try {
+    void fetch(buildBuilder2JobCancelUrl(trimmed), {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      keepalive: true,
+      headers: buildBuilder2RequestHeaders({
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({ reason })
+    })
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+/**
  * POST /api/builder2-resume — resume durable Builder2 job from first incomplete stage.
  */
 async function resumeBuilder2Job(jobId, { signal } = {}) {
@@ -474,6 +542,9 @@ export {
   generate,
   generateVideo,
   fetchVideoStatus,
+  cancelBuilder2Job,
+  cancelBuilder2JobKeepalive,
+  buildBuilder2JobCancelUrl,
   resumeBuilder2Job,
   buildBuilder2RequestHeaders,
   downloadZip,

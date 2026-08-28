@@ -3,11 +3,23 @@
  */
 
 export const BUILDER2_MSG_RESTORING = 'משחזר את העבודה האחרונה…'
+export const BUILDER2_MSG_CANCELLING = 'מבטל את העבודה הקודמת…'
+export const BUILDER2_MSG_CANCEL_BLOCKED =
+  'לא ניתן לאשר שהעבודה הקודמת בוטלה. נסו לרענן שוב בעוד רגע.'
 export const BUILDER2_MSG_DISCONNECTED =
   'החיבור נותק. העבודה נשמרה וננסה להתחבר מחדש.'
 export const BUILDER2_MSG_RESUME_IN_PROGRESS = 'העבודה כבר ממשיכה מהשלב האחרון.'
 export const BUILDER2_MSG_PREPARING_VIDEO_FILE = 'מכין את קובץ הווידאו לצפייה'
 export const BUILDER2_MSG_NEW_VIDEO = 'צור סרטון חדש'
+
+const BUILDER2_CANCEL_ACK_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'already_cancelled',
+  'already_canceled',
+  'already_completed',
+  'already_terminal'
+])
 /** Internal constant — not shown in public Builder2 UI. */
 export const BUILDER2_MSG_RESUME = 'המשך מאותה נקודה'
 export const BUILDER2_MSG_GENERIC_FAILURE = 'לא הצלחנו להשלים את יצירת הסרטון.'
@@ -119,6 +131,28 @@ export function isBuilder2TerminalNonRecoverableFailure(payload) {
   if (status === 'error') return true
 
   return false
+}
+
+/**
+ * @param {object|null|undefined} payload
+ */
+export function isBuilder2CancelAcknowledged(payload) {
+  if (!payload || typeof payload !== 'object') return false
+  if (payload.ok === true) return true
+  if (payload.acknowledged === true) return true
+
+  const candidates = [
+    payload.status,
+    payload.result,
+    payload.code,
+    payload.cancelStatus,
+    payload.cancel_status,
+    payload.state
+  ]
+    .filter((v) => v != null)
+    .map((v) => String(v).trim().toLowerCase())
+
+  return candidates.some((value) => BUILDER2_CANCEL_ACK_STATUSES.has(value))
 }
 
 /**

@@ -4,7 +4,7 @@ import Builder2ProgressBar from '../../components/ProgressBar/Builder2ProgressBa
 import VideoAdCard from '../../components/VideoAdCard/VideoAdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
 import { generateMarketingText } from '../../utils/marketingText'
-import { generateVideo, fetchVideoStatus, resumeBuilder2Job } from '../../services/api'
+import { generateVideo, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive } from '../../services/api'
 import { ensureBuilder2OwnerContext } from '../../utils/builder2OwnerContext'
 import {
   readBuilder2CurrentJob,
@@ -12,24 +12,28 @@ import {
   clearBuilder2CurrentJob,
   updateBuilder2CurrentJobFromStatus
 } from '../../utils/builder2JobPersistence'
+import {
+  readBuilder2ActiveJob,
+  writeBuilder2ActiveJob,
+  clearBuilder2ActiveJob
+} from '../../utils/builder2ActiveJob'
 import { clearBuilder2FormDraft } from '../../utils/builder2FormDraft'
 import {
-  BUILDER2_MSG_RESTORING,
+  BUILDER2_MSG_CANCELLING,
+  BUILDER2_MSG_CANCEL_BLOCKED,
   BUILDER2_MSG_DISCONNECTED,
   BUILDER2_MSG_PREPARING_VIDEO_FILE,
-  BUILDER2_MSG_NEW_VIDEO,
   normalizeBuilder2Status,
   isBuilder2StatusCompleted,
   isBuilder2StatusRunning,
   isBuilder2StatusFailed,
-  isBuilder2TerminalNonRecoverableFailure,
+  isBuilder2CancelAcknowledged,
   isBuilder2ResumeAlreadyInProgress,
   getBuilder2OwnershipErrorCode,
   getBuilder2SafeFailureMessage,
   buildBuilder2VideoResult,
   isTransientBuilder2PollFailure,
-  resolveBuilder2FinalVideoUrl,
-  isValidBuilder2VideoUrl
+  resolveBuilder2FinalVideoUrl
 } from '../../utils/builder2Status'
 import {
   reconcileBuilder2JobTiming,
@@ -112,7 +116,8 @@ function extractResolvedProductName(payload) {
 
 function Builder2Page() {
   const [state, setState] = useState(STATE.IDLE)
-  const [restorePhase, setRestorePhase] = useState('checking')
+  const [initPhase, setInitPhase] = useState('checking')
+  const [cancellationGate, setCancellationGate] = useState('ready')
   const [videoResult, setVideoResult] = useState(null)
   const [failureInfo, setFailureInfo] = useState(null)
   const [ownershipError, setOwnershipError] = useState(null)
@@ -230,6 +235,27 @@ function Builder2Page() {
     pollGenerationRef.current += 1
   }, [])
 
+  const resetFreshGenerationUi = useCallback(() => {
+    stopPolling()
+    activeJobIdRef.current = null
+    progressActiveJobIdRef.current = null
+    progressJobStartMsRef.current = null
+    pendingVideoResultRef.current = null
+    lockedResolvedNameRef.current = null
+    hadConfirmedRunningRef.current = false
+    submitInFlightRef.current = false
+
+    setVideoResult(null)
+    setFailureInfo(null)
+    setOwnershipError(null)
+    setErrorMessage(null)
+    setIsDisconnected(false)
+    setState(STATE.IDLE)
+    stopProgressUi()
+    setProgressTiming(null)
+    resetFreshFormFields()
+  }, [resetFreshFormFields, stopPolling, stopProgressUi])
+
   const showCompletedResult = useCallback(
     (statusPayload, jobId, { immediate = false } = {}) => {
       const built = buildBuilder2VideoResult(statusPayload, generateMarketingText)
@@ -241,6 +267,7 @@ function Builder2Page() {
       }
 
       updateBuilder2CurrentJobFromStatus(jobId, { ...statusPayload, status: 'done', completed: true })
+      clearBuilder2ActiveJob()
       setFailureInfo(null)
       setOwnershipError(null)
       setIsDisconnected(false)
@@ -273,6 +300,7 @@ function Builder2Page() {
     stopProgressUi()
     setProgressTiming(null)
     submitInFlightRef.current = false
+    clearBuilder2ActiveJob()
   }, [stopProgressUi])
 
   const handleFailureFromStatus = useCallback(
@@ -282,12 +310,14 @@ function Builder2Page() {
         setOwnershipError(getBuilder2SafeFailureMessage(statusPayload))
         setFailureInfo(null)
         updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
+        clearBuilder2ActiveJob()
         stopProgressUi()
         setState(STATE.IDLE)
         return
       }
 
       updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
+      clearBuilder2ActiveJob()
       stopProgressUi()
       setFailureInfo({
         message: getBuilder2SafeFailureMessage(statusPayload),
@@ -305,6 +335,7 @@ function Builder2Page() {
         clearBuilder2JobStartTime(jobId)
       }
       clearBuilder2CurrentJob()
+      clearBuilder2ActiveJob()
       activeJobIdRef.current = null
       progressActiveJobIdRef.current = null
       progressJobStartMsRef.current = null
@@ -333,7 +364,7 @@ function Builder2Page() {
   }, [releasePersistedJobAssociation, resetFreshFormFields])
 
   const processStatusPayload = useCallback(
-    async (jobId, statusPayload, { fromRestore = false } = {}) => {
+    async (jobId, statusPayload) => {
       if (!jobId || !statusPayload) return 'continue'
 
       const responseJobId = String(statusPayload.jobId ?? statusPayload.job_id ?? jobId).trim()
@@ -348,7 +379,7 @@ function Builder2Page() {
 
       if (isBuilder2ResumeAlreadyInProgress(statusPayload)) {
         setFailureInfo(null)
-        if (!showProgressBar || fromRestore) {
+        if (!showProgressBar) {
           beginProgress(jobId)
         }
         return 'continue'
@@ -402,7 +433,7 @@ function Builder2Page() {
         applyPollProgressTiming(jobId, statusPayload)
         updateBuilder2CurrentJobFromStatus(jobId, statusPayload)
         tryApplyResolvedProductName(statusPayload)
-        if (!showProgressBar || fromRestore) {
+        if (!showProgressBar) {
           beginProgress(jobId)
         }
         setIsDisconnected(false)
@@ -498,60 +529,62 @@ function Builder2Page() {
   }, [stopPolling])
 
   useEffect(() => {
+    const onPageHide = () => {
+      const activeJob = readBuilder2ActiveJob()
+      if (!activeJob?.jobId) return
+      cancelBuilder2JobKeepalive(activeJob.jobId, { reason: 'frontend_refresh' })
+    }
+    window.addEventListener('pagehide', onPageHide)
+    return () => window.removeEventListener('pagehide', onPageHide)
+  }, [])
+
+  useEffect(() => {
     ensureBuilder2OwnerContext()
-    const persisted = readBuilder2CurrentJob()
-    if (!persisted?.jobId) {
-      setRestorePhase('done')
+    resetFreshGenerationUi()
+    clearBuilder2CurrentJob()
+
+    const activeJob = readBuilder2ActiveJob()
+    if (!activeJob?.jobId) {
+      setCancellationGate('ready')
+      setInitPhase('done')
       return undefined
     }
 
     let cancelled = false
-    const jobId = persisted.jobId
-    activeJobIdRef.current = jobId
-    progressActiveJobIdRef.current = jobId
+    const jobId = activeJob.jobId
+    setCancellationGate('pending')
+    setInitPhase('cancelling')
 
     ;(async () => {
-      const st = await fetchVideoStatus(jobId)
+      const result = await cancelBuilder2Job(jobId)
       if (cancelled) return
 
-      if (isBuilder2TerminalNonRecoverableFailure(st)) {
-        releasePersistedJobAssociation(jobId)
-        resetFreshFormFields()
-        setFailureInfo(null)
-        setOwnershipError(null)
-        setIsDisconnected(false)
-        setState(STATE.IDLE)
-        setRestorePhase('done')
-        return
+      if (isBuilder2CancelAcknowledged(result)) {
+        clearBuilder2ActiveJob()
+        clearBuilder2CurrentJob()
+        clearBuilder2JobStartTime(jobId)
+        setCancellationGate('ready')
+      } else {
+        setCancellationGate('blocked')
+        setErrorMessage(BUILDER2_MSG_CANCEL_BLOCKED)
       }
-
-      if (persisted.completed) {
-        if (isValidBuilder2VideoUrl(resolveBuilder2FinalVideoUrl(st))) {
-          const built = buildBuilder2VideoResult(st, generateMarketingText)
-          setVideoResult(built)
-          setState(STATE.SUCCESS)
-        } else {
-          beginProgress(jobId)
-          startPolling(jobId)
-        }
-        setRestorePhase('done')
-        return
-      }
-
-      const outcome = await processStatusPayload(jobId, st, { fromRestore: true })
-      if (outcome !== 'terminal' && outcome !== 'stale') {
-        startPolling(jobId)
-      }
-      setRestorePhase('done')
+      setInitPhase('done')
     })()
 
     return () => {
       cancelled = true
     }
-  }, [beginProgress, processStatusPayload, releasePersistedJobAssociation, resetFreshFormFields, startPolling])
+  }, [resetFreshGenerationUi])
 
   const handleSubmit = async (data) => {
-    if (submitInFlightRef.current || readBuilder2CurrentJob()?.jobId) {
+    if (
+      submitInFlightRef.current ||
+      cancellationGate !== 'ready' ||
+      initPhase !== 'done' ||
+      readBuilder2CurrentJob()?.jobId ||
+      state === STATE.GENERATING ||
+      showProgressBar
+    ) {
       return
     }
 
@@ -599,6 +632,7 @@ function Builder2Page() {
         lastKnownStatus: normalizeBuilder2Status(start) || 'queued',
         completed: false
       })
+      writeBuilder2ActiveJob({ jobId })
 
       activeJobIdRef.current = jobId
       progressActiveJobIdRef.current = jobId
@@ -615,30 +649,21 @@ function Builder2Page() {
     }
   }
 
-  const handleStartNewVideo = () => {
-    stopPolling()
-    const jobId = activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId
-    if (jobId) {
-      clearBuilder2JobStartTime(jobId)
-    }
-    clearBuilder2CurrentJob()
-    resetFreshFormFields()
-    activeJobIdRef.current = null
-    progressActiveJobIdRef.current = null
-    progressJobStartMsRef.current = null
-    pendingVideoResultRef.current = null
-    lockedResolvedNameRef.current = null
-    hadConfirmedRunningRef.current = false
-    submitInFlightRef.current = false
+  const hasPersistedJob = Boolean(readBuilder2CurrentJob()?.jobId)
+  const isActivelyProcessing = state === STATE.GENERATING || showProgressBar
+  const fieldsReadOnly = isActivelyProcessing
+  const submitDisabled =
+    initPhase !== 'done' ||
+    cancellationGate !== 'ready' ||
+    submitInFlightRef.current ||
+    hasPersistedJob ||
+    isActivelyProcessing
 
-    setVideoResult(null)
-    setFailureInfo(null)
-    setOwnershipError(null)
-    setErrorMessage(null)
-    setIsDisconnected(false)
-    setState(STATE.IDLE)
-    stopProgressUi()
-    setProgressTiming(null)
+  const getButtonText = () => {
+    if (cancellationGate === 'pending') return 'GENERATE'
+    if (hasPersistedJob && !isActivelyProcessing) return 'GENERATE AGAIN'
+    if (isActivelyProcessing) return 'GENERATING'
+    return 'GENERATE'
   }
 
   const handlePlaybackError = useCallback(async () => {
@@ -652,32 +677,21 @@ function Builder2Page() {
     }
   }, [])
 
-  const hasPersistedJob = Boolean(readBuilder2CurrentJob()?.jobId)
-  const isActivelyProcessing = state === STATE.GENERATING || showProgressBar
-  const fieldsReadOnly = isActivelyProcessing
-  const submitDisabled =
-    restorePhase === 'checking' ||
-    hasPersistedJob ||
-    submitInFlightRef.current ||
-    isActivelyProcessing
-
-  const getButtonText = () => {
-    if (hasPersistedJob && !isActivelyProcessing) return 'GENERATE AGAIN'
-    if (isActivelyProcessing) return 'GENERATING'
-    return 'GENERATE'
-  }
-
-  void resumeBuilder2Job
-
   return (
     <div className="builder-page builder2-page">
       <div className="builder-title-block">
         <h1 className="builder-title">יוצר וידאו</h1>
       </div>
 
-      {restorePhase === 'checking' ? (
+      {initPhase === 'cancelling' ? (
         <p className="builder2-restore-message" dir="rtl" aria-live="polite">
-          {BUILDER2_MSG_RESTORING}
+          {BUILDER2_MSG_CANCELLING}
+        </p>
+      ) : null}
+
+      {cancellationGate === 'blocked' ? (
+        <p className="builder2-cancel-blocked-message" dir="rtl" aria-live="polite">
+          {BUILDER2_MSG_CANCEL_BLOCKED}
         </p>
       ) : null}
 
@@ -766,9 +780,6 @@ function Builder2Page() {
             isGenerating={state === STATE.GENERATING}
             onPlaybackError={handlePlaybackError}
           />
-          <button type="button" className="builder2-new-video-button" onClick={handleStartNewVideo}>
-            {BUILDER2_MSG_NEW_VIDEO}
-          </button>
         </div>
       ) : null}
     </div>

@@ -7,7 +7,8 @@
 }
 
 .builder2-restore-message,
-.builder2-disconnect-message {
+.builder2-disconnect-message,
+.builder2-cancel-blocked-message {
   margin: 1rem 0;
   text-align: center;
   color: #e8e8e8;
@@ -20,11 +21,4 @@
 
 .builder2-progress-section {
   margin-top: 1rem;
-}
-
-.builder2-new-video-button {
-  display: block;
-  margin: 1rem auto 0;
-  padding: 0.65rem 1.25rem;
-  cursor: pointer;
 }
