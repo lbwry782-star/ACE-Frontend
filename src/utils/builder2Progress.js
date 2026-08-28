@@ -2,8 +2,8 @@
  * Builder2 video generation progress (UI estimate only).
  */
 
-/** Default Builder2 estimate — 20 minutes. */
-export const BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS = 1200
+/** Default Builder2 estimate — 30 minutes. */
+export const BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS = 1800
 
 export const BUILDER2_ESTIMATED_DURATION_MS = BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS * 1000
 
@@ -11,19 +11,19 @@ export const BUILDER2_ESTIMATED_DURATION_MS = BUILDER2_DEFAULT_ESTIMATED_TOTAL_S
 export const BUILDER2_PROGRESS_COMPLETION_DURATION_MS = 500
 
 /** Max progress while job is still running (never 100% until completion). */
-export const BUILDER2_PROGRESS_MAX_WHILE_RUNNING = 99.5
+export const BUILDER2_PROGRESS_MAX_WHILE_RUNNING = 95
 
 /** Cap while waiting for final URL after backend reports completed. */
-export const BUILDER2_PROGRESS_PENDING_URL_CAP = 99
+export const BUILDER2_PROGRESS_PENDING_URL_CAP = 95
 
 /** Linear cap for the first estimatedTotalSeconds. */
-export const BUILDER2_PROGRESS_PRE_ESTIMATE_CAP = 97
+export const BUILDER2_PROGRESS_PRE_ESTIMATE_CAP = 95
 
-/** Post-estimate crawl duration in seconds (97 → 99.5). */
+/** Post-estimate crawl duration in seconds (reserved; cap equals max while running). */
 export const BUILDER2_POST_ESTIMATE_CRAWL_SECONDS = 240
 
 export const BUILDER2_PROGRESS_HEADLINE_HE = 'יוצר וידאו איכותי'
-export const BUILDER2_PROGRESS_ESTIMATE_HE = 'זמן משוער: כ־20 דקות'
+export const BUILDER2_PROGRESS_ESTIMATE_HE = 'זמן משוער: כ־30 דקות'
 export const BUILDER2_PROGRESS_POST_ESTIMATE_TAIL_HE = 'מסיים את הווידאו'
 export const BUILDER2_PROGRESS_REMAINING_PREFIX_HE = 'זמן שנותר: '
 export const BUILDER2_PROGRESS_SEPARATOR = ' · '
