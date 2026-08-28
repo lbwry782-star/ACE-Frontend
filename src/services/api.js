@@ -476,6 +476,67 @@ function cancelBuilder2JobKeepalive(jobId, { reason = 'frontend_refresh' } = {})
 }
 
 /**
+ * Parse filename from Content-Disposition header when present.
+ * @param {string|null|undefined} header
+ */
+function parseContentDispositionFilename(header) {
+  if (!header || typeof header !== 'string') return null
+  const utf8 = header.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].trim())
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  const quoted = header.match(/filename="([^"]+)"/i)
+  if (quoted?.[1]) return quoted[1].trim()
+  const plain = header.match(/filename=([^;\s]+)/i)
+  if (plain?.[1]) return plain[1].trim().replace(/^["']|["']$/g, '')
+  return null
+}
+
+const BUILDER2_ZIP_DEFAULT_FILENAME = 'ace-builder2-video.zip'
+
+/**
+ * POST /api/builder2-download-zip — download Builder2 result ZIP (binary blob).
+ */
+async function downloadBuilder2Zip({ videoUrl, marketingText, signal } = {}) {
+  const url = String(videoUrl ?? '').trim()
+  const text = marketingText == null ? '' : String(marketingText)
+  if (!url || !text) {
+    throw new Error('Missing videoUrl or marketingText')
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/builder2-download-zip`, {
+    method: 'POST',
+    mode: 'cors',
+    credentials: 'omit',
+    signal,
+    headers: buildBuilder2RequestHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/zip, application/octet-stream, */*'
+    }),
+    body: JSON.stringify({ videoUrl: url, marketingText: text })
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(async () => {
+      const errorText = await response.text().catch(() => '')
+      return { message: errorText || `Server error: ${response.status}` }
+    })
+    const msg = errorData?.message || errorData?.error || `Server error: ${response.status}`
+    throw new Error(typeof msg === 'string' ? msg : 'Download failed')
+  }
+
+  const blob = await response.blob()
+  const filename =
+    parseContentDispositionFilename(response.headers.get('Content-Disposition')) ||
+    BUILDER2_ZIP_DEFAULT_FILENAME
+  return { blob, filename }
+}
+
+/**
  * POST /api/builder2-resume — resume durable Builder2 job from first incomplete stage.
  */
 async function resumeBuilder2Job(jobId, { signal } = {}) {
@@ -545,6 +606,9 @@ export {
   cancelBuilder2Job,
   cancelBuilder2JobKeepalive,
   buildBuilder2JobCancelUrl,
+  downloadBuilder2Zip,
+  parseContentDispositionFilename,
+  BUILDER2_ZIP_DEFAULT_FILENAME,
   resumeBuilder2Job,
   buildBuilder2RequestHeaders,
   downloadZip,

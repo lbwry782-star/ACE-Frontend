@@ -3,7 +3,6 @@ import ProductForm2 from '../../components/Form/ProductForm2'
 import Builder2ProgressBar from '../../components/ProgressBar/Builder2ProgressBar'
 import VideoAdCard from '../../components/VideoAdCard/VideoAdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
-import { generateMarketingText } from '../../utils/marketingText'
 import { generateVideo, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive } from '../../services/api'
 import { ensureBuilder2OwnerContext } from '../../utils/builder2OwnerContext'
 import {
@@ -258,7 +257,7 @@ function Builder2Page() {
 
   const showCompletedResult = useCallback(
     (statusPayload, jobId, { immediate = false } = {}) => {
-      const built = buildBuilder2VideoResult(statusPayload, generateMarketingText)
+      const built = buildBuilder2VideoResult(statusPayload)
       if (!built.videoUrl) {
         setProgressPendingFinalUrl(true)
         setProgressStageLabel(BUILDER2_MSG_PREPARING_VIDEO_FILE)

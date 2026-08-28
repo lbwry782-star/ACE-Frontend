@@ -46,3 +46,11 @@
   direction: auto;
   unicode-bidi: plaintext;
 }
+
+.ad-card-download-error {
+  margin-top: 10px;
+  color: #f0a0a0;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}

@@ -254,11 +254,13 @@ assert.equal(headers['Content-Type'], 'application/json')
 
 // Extra: completed detection + result builder
 assert.ok(isBuilder2StatusCompleted({ status: 'done' }))
-const built = buildBuilder2VideoResult(
-  { status: 'done', finalVideoWithClosureUrl: 'https://cdn.example/v.mp4' },
-  () => 'marketing'
-)
+const built = buildBuilder2VideoResult({
+  status: 'done',
+  finalVideoWithClosureUrl: 'https://cdn.example/v.mp4',
+  marketingText: 'Backend marketing copy preserved.'
+})
 assert.equal(built.videoUrl, 'https://cdn.example/v.mp4')
+assert.equal(built.marketingText, 'Backend marketing copy preserved.')
 
 // Extra: stage floor smoothing never moves backward
 const floored = mergeBuilder2ProgressWithStageFloor(10, 40, 35)

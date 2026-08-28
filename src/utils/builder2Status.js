@@ -231,15 +231,26 @@ export function getBuilder2SafeFailureMessage(payload) {
 }
 
 /**
+ * Backend marketing copy for completed Builder2 ads (source of truth — no local generation).
  * @param {object|null|undefined} payload
- * @param {typeof import('./marketingText.js').generateMarketingText} generateMarketingText
  */
-export function buildBuilder2VideoResult(payload, generateMarketingText) {
+export function resolveBuilder2MarketingText(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  const raw = payload.marketingText ?? payload.marketing_text
+  if (raw == null) return null
+  const text = String(raw)
+  return text.length > 0 ? text : null
+}
+
+/**
+ * @param {object|null|undefined} payload
+ */
+export function buildBuilder2VideoResult(payload) {
   const videoUrl = resolveBuilder2FinalVideoUrl(payload)
-  const mt = String(payload?.marketingText ?? payload?.marketing_text ?? '').trim()
+  const marketingText = resolveBuilder2MarketingText(payload)
   return {
     videoUrl: videoUrl || null,
-    marketingText: mt || generateMarketingText(1),
+    marketingText,
     headline: payload?.headline || 'Video result',
     headlineText: payload?.headlineText ?? payload?.headline_text ?? null,
     overlayHeadline: payload?.overlayHeadline ?? payload?.overlay_headline ?? null,

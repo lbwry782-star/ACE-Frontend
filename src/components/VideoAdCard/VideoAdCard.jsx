@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
-import { generateMarketingText } from '../../utils/marketingText'
+import { downloadBuilder2Zip } from '../../services/api'
 import '../AdCard/adcard.css'
 import './video-ad-card.css'
 
 /**
- * Builder2 result card: video + ~50-word marketing copy + Download ZIP (same behavior as AdCard).
+ * Builder2 result card: final video + backend marketing copy + Download ZIP.
  */
 function VideoAdCard({
-  attemptNumber,
+  attemptNumber: _attemptNumber,
   videoSrc: propVideoSrc,
   marketingText: propMarketingText,
   headline: propHeadline,
@@ -18,9 +18,10 @@ function VideoAdCard({
   onPlaybackError
 }) {
   const [videoSrc, setVideoSrc] = useState(propVideoSrc || null)
-  const [marketingText, setMarketingText] = useState(propMarketingText ?? generateMarketingText(attemptNumber))
+  const [marketingText, setMarketingText] = useState(propMarketingText ?? '')
   const [headline, setHeadline] = useState(propHeadline ?? '')
   const [downloadLoading, setDownloadLoading] = useState(false)
+  const [downloadError, setDownloadError] = useState(null)
 
   useEffect(() => {
     if (propVideoSrc) setVideoSrc(propVideoSrc)
@@ -70,29 +71,33 @@ function VideoAdCard({
   const restLine = removeDuplicateProductPrefix(restSource, productLine) || '\u00A0'
 
   const videoUrl = String(videoSrc ?? '').trim()
-  const hasMarketingText = Boolean(String(marketingText ?? '').trim())
+  const marketingCopy = marketingText == null ? '' : String(marketingText)
+  const hasMarketingText = marketingCopy.length > 0
   const canDownload = !isGenerating && !downloadLoading && !!videoUrl && hasMarketingText
 
   const handleDownload = async () => {
     if (!canDownload) return
-    if (!videoUrl || !marketingText) {
-      console.log('DOWNLOAD_ZIP_MISSING_DATA', { videoUrl, marketingText })
-      return
-    }
+    if (!videoUrl || !hasMarketingText) return
 
     setDownloadLoading(true)
+    setDownloadError(null)
     try {
-      const backendBase = 'https://ace-backend-k1p6.onrender.com'
-      const url = `${backendBase}/api/download-video-zip?videoUrl=${encodeURIComponent(videoUrl)}&text=${encodeURIComponent(marketingText)}`
-
-      console.log('DOWNLOAD_ZIP_URL', url)
-
+      const { blob, filename } = await downloadBuilder2Zip({
+        videoUrl,
+        marketingText: marketingCopy
+      })
+      const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
-      a.download = 'ace-video-ad.zip'
+      a.href = objectUrl
+      a.download = filename
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
+      URL.revokeObjectURL(objectUrl)
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message ? err.message : 'Download failed. Please try again.'
+      setDownloadError(message)
     } finally {
       setDownloadLoading(false)
     }
@@ -116,7 +121,14 @@ function VideoAdCard({
           </video>
         </div>
       )}
-      {baseHeadline && (
+      {hasMarketingText ? (
+        <div className="ad-card-text ad-card-video-marketing-text" dir="auto">
+          <p dir="auto">
+            <bdi>{marketingCopy}</bdi>
+          </p>
+        </div>
+      ) : null}
+      {baseHeadline ? (
         <div className="ad-card-video-headline" dir="auto">
           <div className="ad-card-video-headline-product">
             <bdi>{productLine || split.first}</bdi>
@@ -125,20 +137,20 @@ function VideoAdCard({
             <bdi>{restLine}</bdi>
           </div>
         </div>
-      )}
-      <div className="ad-card-text ad-card-video-marketing-text" dir="auto">
-        <p dir="auto">
-          <bdi>{marketingText}</bdi>
-        </p>
-      </div>
+      ) : null}
       <button
         type="button"
         className="ad-card-download"
         onClick={handleDownload}
-        disabled={isGenerating || !videoUrl || !marketingText || downloadLoading}
+        disabled={isGenerating || !videoUrl || !hasMarketingText || downloadLoading}
       >
         {downloadLoading ? 'Downloading…' : 'DOWNLOAD ZIP להורדה'}
       </button>
+      {downloadError ? (
+        <p className="ad-card-download-error" dir="auto" role="alert">
+          {downloadError}
+        </p>
+      ) : null}
     </div>
   )
 }
