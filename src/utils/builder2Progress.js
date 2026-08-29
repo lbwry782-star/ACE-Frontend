@@ -273,6 +273,40 @@ function createDefaultTimingState(startMs) {
 }
 
 /**
+ * Local startMs elapsed only (ignores server anchor).
+ * @param {object} state
+ * @param {number} nowMs
+ */
+function getBuilder2LocalElapsedFromState(state, nowMs) {
+  if (state.startMs != null && Number.isFinite(state.startMs)) {
+    return Math.max(0, (nowMs - state.startMs) / 1000)
+  }
+  return 0
+}
+
+/**
+ * Effective elapsed from internal timing state (reconcile helper).
+ * @param {object} state
+ * @param {number} nowMs
+ */
+function getBuilder2EffectiveElapsedFromState(state, nowMs) {
+  if (
+    state.serverElapsedSeconds != null &&
+    state.serverElapsedAtMs != null &&
+    Number.isFinite(state.serverElapsedAtMs)
+  ) {
+    const deltaSec = Math.max(0, (nowMs - state.serverElapsedAtMs) / 1000)
+    return Math.max(0, state.serverElapsedSeconds + deltaSec)
+  }
+
+  if (state.startMs != null && Number.isFinite(state.startMs)) {
+    return Math.max(0, (nowMs - state.startMs) / 1000)
+  }
+
+  return 0
+}
+
+/**
  * @param {string} jobId
  * @param {object|null|undefined} statusPayload
  * @param {number} [fallbackStartMs=Date.now()]
@@ -302,11 +336,35 @@ export function reconcileBuilder2JobTiming(jobId, statusPayload, fallbackStartMs
     state.estimatedTotalSeconds = parsed.estimatedTotalSeconds
   }
   if (parsed.elapsedSeconds != null) {
-    state.serverElapsedSeconds =
-      state.serverElapsedSeconds != null
-        ? Math.max(state.serverElapsedSeconds, parsed.elapsedSeconds)
-        : parsed.elapsedSeconds
-    state.serverElapsedAtMs = Date.now()
+    const incoming = parsed.elapsedSeconds
+
+    // Zero means "no useful server update yet" — never activate or refresh server timing.
+    if (incoming > 0) {
+      const nowMs = Date.now()
+
+      if (state.serverElapsedSeconds != null) {
+        const effectiveNow = getBuilder2EffectiveElapsedFromState(state, nowMs)
+
+        if (incoming < effectiveNow - 0.001) {
+          // Regressive relative to established server clock — keep monotonic timing.
+        } else if (incoming === state.serverElapsedSeconds) {
+          // Unchanged positive value — do not reset serverElapsedAtMs.
+        } else if (incoming > state.serverElapsedSeconds) {
+          state.serverElapsedSeconds = incoming
+          state.serverElapsedAtMs = nowMs
+        }
+      } else {
+        const localElapsed = getBuilder2LocalElapsedFromState(state, nowMs)
+        const localLooksExtrapolated =
+          localElapsed >
+          (state.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS)
+
+        if (incoming >= localElapsed - 0.001 || localLooksExtrapolated) {
+          state.serverElapsedSeconds = incoming
+          state.serverElapsedAtMs = nowMs
+        }
+      }
+    }
   }
   if (parsed.progressStage != null) {
     state.stageFloor = Math.max(state.stageFloor ?? 0, getBuilder2StageProgressFloor(parsed.progressStage))

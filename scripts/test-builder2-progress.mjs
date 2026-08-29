@@ -31,7 +31,9 @@ import {
   reconcileBuilder2JobTiming,
   resolveBuilder2JobStartTime,
   clearBuilder2JobStartTime,
-  clearAllBuilder2JobStartTimes
+  clearAllBuilder2JobStartTimes,
+  computeBuilder2ProgressTarget,
+  advanceBuilder2DisplayedProgress
 } from '../src/utils/builder2Progress.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -252,6 +254,130 @@ assert.ok(BUILDER2_PROGRESS_PENDING_URL_CAP === 95)
 assert.ok(
   resolveBuilder2ProgressFrame({ elapsedSeconds: 5000, previousPercent: 0, pendingFinalUrl: true }) <
     100
+)
+
+// --- Server elapsed reconciliation (production regression) ---
+
+// 9. Repeated elapsedSeconds=0 polls — local startMs keeps advancing
+clearAllBuilder2JobStartTimes()
+const zeroPollT0 = 1_700_000_000_000
+const zeroPollJobId = 'zero-polls-60s'
+let zeroPollTiming = reconcileBuilder2JobTiming(
+  zeroPollJobId,
+  { progressStartedAt: zeroPollT0 },
+  zeroPollT0
+)
+let zeroPollDisplayed = 0
+let zeroPollPrevDisplayed = 0
+for (let sec = 2; sec <= 60; sec += 2) {
+  zeroPollTiming = reconcileBuilder2JobTiming(
+    zeroPollJobId,
+    { status: 'running', elapsedSeconds: 0 },
+    zeroPollT0
+  )
+  assert.equal(
+    zeroPollTiming.serverElapsedSeconds,
+    null,
+    `server timing must not activate on zero at ${sec}s`
+  )
+  const elapsed = getBuilder2ElapsedSeconds(zeroPollTiming, zeroPollT0 + sec * 1000)
+  const target = computeBuilder2ProgressTarget(elapsed, TOTAL, 0, false)
+  for (let frame = 0; frame < 30; frame++) {
+    zeroPollDisplayed = advanceBuilder2DisplayedProgress(target, zeroPollDisplayed, 9 * 0.016)
+  }
+  assert.ok(elapsed >= sec - 0.01, `elapsed should advance at ${sec}s`)
+  assert.ok(zeroPollDisplayed >= zeroPollPrevDisplayed, 'displayed must stay monotonic')
+  zeroPollPrevDisplayed = zeroPollDisplayed
+}
+const zeroPollElapsed60 = getBuilder2ElapsedSeconds(zeroPollTiming, zeroPollT0 + 60_000)
+approx(zeroPollElapsed60, 60, 0.1)
+const zeroPollTarget60 = computeBuilder2ProgressTarget(zeroPollElapsed60, TOTAL, 0, false)
+approx(zeroPollTarget60, 3.17, 0.15)
+assert.ok(zeroPollDisplayed > 0, 'displayed progress must exceed 0 after 60s')
+assert.notEqual(
+  getBuilder2RemainingTimeText(zeroPollElapsed60, TOTAL),
+  getBuilder2RemainingTimeText(0, TOTAL),
+  'remaining time must decrease from initial 30:00'
+)
+
+// 10. Generate response with elapsedSeconds=0 then beginProgress
+clearAllBuilder2JobStartTimes()
+const genZeroJobId = 'generate-zero'
+const genZeroT0 = 1_700_000_100_000
+let genZeroTiming = reconcileBuilder2JobTiming(
+  genZeroJobId,
+  { ok: true, jobId: genZeroJobId, elapsedSeconds: 0, status: 'queued' },
+  genZeroT0
+)
+genZeroTiming = reconcileBuilder2JobTiming(
+  genZeroJobId,
+  { progressStartedAt: genZeroT0 },
+  genZeroT0
+)
+assert.equal(genZeroTiming.serverElapsedSeconds, null)
+approx(getBuilder2ElapsedSeconds(genZeroTiming, genZeroT0 + 60_000), 60, 0.1)
+
+// 11. Unchanged positive server value — anchor not reset on repeat
+clearAllBuilder2JobStartTimes()
+const unchangedJobId = 'unchanged-positive'
+const unchangedStartMs = Date.now() - 20_000
+let unchangedTiming = reconcileBuilder2JobTiming(
+  unchangedJobId,
+  { progressStartedAt: unchangedStartMs },
+  unchangedStartMs
+)
+unchangedTiming = reconcileBuilder2JobTiming(unchangedJobId, { elapsedSeconds: 20 })
+const unchangedAnchorMs = unchangedTiming.serverElapsedAtMs
+assert.equal(unchangedTiming.serverElapsedSeconds, 20)
+unchangedTiming = reconcileBuilder2JobTiming(unchangedJobId, { elapsedSeconds: 20 })
+assert.equal(unchangedTiming.serverElapsedAtMs, unchangedAnchorMs)
+approx(getBuilder2ElapsedSeconds(unchangedTiming, unchangedAnchorMs + 5000), 25, 0.1)
+
+// 12. Increasing server values — accepted monotonically
+clearAllBuilder2JobStartTimes()
+const increasingJobId = 'increasing-server'
+const increasingStartMs = Date.now() - 5000
+let increasingTiming = reconcileBuilder2JobTiming(
+  increasingJobId,
+  { progressStartedAt: increasingStartMs },
+  increasingStartMs
+)
+for (const value of [12, 18, 25]) {
+  increasingTiming = reconcileBuilder2JobTiming(increasingJobId, { elapsedSeconds: value })
+  assert.equal(increasingTiming.serverElapsedSeconds, value)
+}
+assert.ok(increasingTiming.serverElapsedSeconds === 25)
+
+// 13. Regressive server value — no backward move
+clearAllBuilder2JobStartTimes()
+const regressiveJobId = 'regressive-server'
+const regressiveNow = Date.now()
+const regressiveStartMs = regressiveNow - 40_000
+let regressiveTiming = reconcileBuilder2JobTiming(
+  regressiveJobId,
+  { progressStartedAt: regressiveStartMs },
+  regressiveStartMs
+)
+approx(getBuilder2ElapsedSeconds(regressiveTiming, regressiveNow), 40, 0.5)
+regressiveTiming = reconcileBuilder2JobTiming(regressiveJobId, { elapsedSeconds: 25 })
+assert.equal(regressiveTiming.serverElapsedSeconds, null)
+approx(getBuilder2ElapsedSeconds(regressiveTiming, regressiveNow + 5000), 45, 0.5)
+
+// 14. No progressStage — time-only progress still advances
+clearAllBuilder2JobStartTimes()
+const noStageJobId = 'no-stage'
+const noStageT0 = 1_700_000_200_000
+let noStageTiming = reconcileBuilder2JobTiming(noStageJobId, { status: 'running' }, noStageT0)
+noStageTiming = reconcileBuilder2JobTiming(
+  noStageJobId,
+  { status: 'running', elapsedSeconds: 0 },
+  noStageT0
+)
+const noStageElapsed = getBuilder2ElapsedSeconds(noStageTiming, noStageT0 + 120_000)
+approx(noStageElapsed, 120, 0.1)
+assert.ok(
+  computeBuilder2ProgressTarget(noStageElapsed, TOTAL, 0, false) > 0,
+  'progress must move without progressStage'
 )
 
 console.log('builder2 progress tests passed')
