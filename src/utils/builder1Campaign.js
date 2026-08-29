@@ -900,6 +900,8 @@ export function validateInitialCampaignResponse(result, requestedAdCount) {
       ? nextAdIndexRaw
       : 2
 
+  const readiness = parseCampaignReadinessFromResult(result)
+
   return {
     ok: true,
     campaignId,
@@ -919,7 +921,8 @@ export function validateInitialCampaignResponse(result, requestedAdCount) {
     ad: extracted.ad,
     ads: [extracted.ad],
     nextAdIndex,
-    targetAdCount
+    targetAdCount,
+    ...readiness
   }
 }
 
@@ -975,11 +978,14 @@ export function validateNextAdResponse(result, ctx) {
   const nextAdIndexRaw = Number(result.nextAdIndex ?? result.next_ad_index ?? expectedIndex + 1)
   const nextAdIndex = Number.isInteger(nextAdIndexRaw) ? nextAdIndexRaw : expectedIndex + 1
 
+  const readiness = parseCampaignReadinessFromResult(result)
+
   return {
     ok: true,
     campaignId: responseCampaignId,
     ad: extracted.ad,
-    nextAdIndex
+    nextAdIndex,
+    ...readiness
   }
 }
 
@@ -1024,7 +1030,13 @@ export function appendAdToSession(session, validatedNext) {
       ads,
       generatedCount,
       nextAdIndex,
-      canGenerateNext: generatedCount < targetAdCount
+      canGenerateNext: generatedCount < targetAdCount,
+      campaignReady:
+        validatedNext.campaignReady === true ? true : (session.campaignReady ?? false),
+      deliveryReconstructible:
+        validatedNext.deliveryReconstructible === true
+          ? true
+          : (session.deliveryReconstructible ?? false)
     }
   }
 }
@@ -1047,6 +1059,11 @@ export function createCampaignSessionFromInitial(validatedInitial, targetAdCount
       ? Number(validatedInitial.nextAdIndex)
       : 2
 
+  const readiness = {
+    campaignReady: Boolean(validatedInitial.campaignReady),
+    deliveryReconstructible: Boolean(validatedInitial.deliveryReconstructible)
+  }
+
   return {
     ok: true,
     session: {
@@ -1057,7 +1074,8 @@ export function createCampaignSessionFromInitial(validatedInitial, targetAdCount
       ads: [validatedInitial.ad],
       generatedCount: 1,
       nextAdIndex,
-      canGenerateNext: count > 1
+      canGenerateNext: count > 1,
+      ...readiness
     }
   }
 }
@@ -1153,6 +1171,23 @@ export function getStageLabel(pollPayload, language = 'he', mode = 'initial', ct
   return isHe ? 'יוצר קמפיין…' : 'Generating campaign…'
 }
 
+/**
+ * @param {unknown} result
+ */
+export function parseCampaignReadinessFromResult(result) {
+  if (!result || typeof result !== 'object') {
+    return { campaignReady: false, deliveryReconstructible: false }
+  }
+  const campaign =
+    result.campaign && typeof result.campaign === 'object' ? result.campaign : result
+  return {
+    campaignReady: Boolean(campaign.campaignReady ?? campaign.campaign_ready),
+    deliveryReconstructible: Boolean(
+      campaign.deliveryReconstructible ?? campaign.delivery_reconstructible
+    )
+  }
+}
+
 /** @param {string} name */
 export function sanitizeCampaignZipFilename(name) {
   const base = String(name || '')
@@ -1161,6 +1196,17 @@ export function sanitizeCampaignZipFilename(name) {
     .replace(/\s+/g, '-')
     .slice(0, 80)
   return base ? `${base}-campaign.zip` : 'builder1-campaign.zip'
+}
+
+/**
+ * @param {object} session
+ */
+export function buildCampaignServerZipRequest(session) {
+  const campaignId = String(session?.campaignId ?? '').trim()
+  return {
+    scope: 'campaign_server',
+    campaignId
+  }
 }
 
 /**

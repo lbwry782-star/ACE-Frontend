@@ -3,7 +3,43 @@ import ProductForm from '../../components/Form/ProductForm'
 import AdCard from '../../components/AdCard/AdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
 import { SecurityConfigContext } from '../../App'
-import { fetchLatestPaid, API_BASE_URL, NetworkError, ApiError } from '../../services/api'
+import { fetchLatestPaid, NetworkError, ApiError } from '../../services/api'
+import {
+  builder1Generate,
+  builder1GenerateNext,
+  pollBuilder1Job,
+  cancelBuilder1Job,
+  cancelBuilder1JobKeepalive,
+  builder1DownloadZip,
+  callBuilder1MutationWithRetry,
+  replayBuilder1PendingMutation
+} from '../../services/builder1Api'
+import { ensureBuilder1OwnerContext } from '../../utils/builder1OwnerContext'
+import { createBuilder1RequestId } from '../../utils/builder1RequestId'
+import {
+  readBuilder1PendingMutation,
+  writeBuilder1PendingMutation,
+  updateBuilder1PendingMutation,
+  clearBuilder1PendingMutation,
+  isUnresolvedBuilder1PendingMutation
+} from '../../utils/builder1PendingMutation'
+import {
+  readBuilder1ActiveJob,
+  writeBuilder1ActiveJob,
+  clearBuilder1ActiveJob
+} from '../../utils/builder1ActiveJob'
+import {
+  BUILDER1_MSG_CANCEL_BLOCKED,
+  BUILDER1_MSG_CANCELLING,
+  BUILDER1_MSG_OWNERSHIP,
+  BUILDER1_MSG_CAMPAIGN_NOT_READY,
+  BUILDER1_MSG_IDEMPOTENCY_CONFLICT,
+  isBuilder1CancelAcknowledged,
+  isBuilder1CampaignAuthoritativelyReady,
+  isBuilder1CampaignDeliveryPending,
+  isBuilder1IdempotencyConflict,
+  extractBuilder1MutationJobIds
+} from '../../utils/builder1Status'
 import {
   readBuilder1CampaignAdCount,
   resolveBuilder1InitialAdCount,
@@ -15,7 +51,9 @@ import {
   appendAdToSession,
   buildInitialGeneratePayload,
   buildSingleAdZipRequest,
+  buildCampaignServerZipRequest,
   sanitizeSingleAdZipFilename,
+  sanitizeCampaignZipFilename,
   getStageLabel,
   createDevMockInitialCampaign,
   createDevMockNextAd,
@@ -37,7 +75,8 @@ import {
   resolveBuilder1RetryErrorResponse,
   parseBuilder1RetryContext,
   getBuilder1RetryModeProgressLabel,
-  buildBuilder1GenerateNextPayload
+  buildBuilder1GenerateNextPayload,
+  BUILDER1_RETRY_MODE
 } from '../../utils/builder1Campaign'
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
@@ -52,7 +91,6 @@ import './builder.css'
 const BUILDER1_ACCESS_GUARD_DISABLED = true
 const PREVIEW_REDIRECT_URL = 'https://ace-advertising.agency/#/preview'
 const POLL_INTERVAL_MS = 2000
-const POLL_TIMEOUT_MS = 15 * 60 * 1000
 
 const STATE = {
   IDLE: 'IDLE',
@@ -147,82 +185,6 @@ function mapUserFacingError(err, code) {
   return raw
 }
 
-async function pollBuilder1Job({
-  jobId,
-  pollToken,
-  isStale,
-  onStage,
-  mode = 'initial',
-  progressCtx = {}
-}) {
-  const deadline = Date.now() + POLL_TIMEOUT_MS
-
-  while (Date.now() < deadline) {
-    if (isStale()) {
-      throw new Error('Stale poll cancelled')
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    if (isStale()) {
-      throw new Error('Stale poll cancelled')
-    }
-
-    let statusResponse
-    try {
-      statusResponse = await fetch(
-        `${API_BASE_URL}/api/builder1-status?jobId=${encodeURIComponent(jobId)}`,
-        {
-          method: 'GET',
-          headers: { Accept: 'application/json' }
-        }
-      )
-    } catch (fetchErr) {
-      if (
-        fetchErr instanceof TypeError ||
-        String(fetchErr?.message ?? '').includes('fetch') ||
-        String(fetchErr?.message ?? '').includes('Network')
-      ) {
-        throw new NetworkError('Network error: Unable to connect to server')
-      }
-      throw fetchErr
-    }
-
-    const statusPayload = await statusResponse.json().catch(() => null)
-    const pollStatus = statusPayload?.status
-
-    if (!statusResponse.ok) {
-      if (statusResponse.status === 404) {
-        throw new Error('job_not_found')
-      }
-      const msg = statusPayload?.message ?? statusPayload?.error
-      throw new Error(typeof msg === 'string' ? msg : `Server error: ${statusResponse.status}`)
-    }
-
-    if (pollStatus === 'running') {
-      if (onStage) {
-        onStage(statusPayload?.stage)
-      }
-      continue
-    }
-
-    if (pollStatus === 'error') {
-      const failCode = statusPayload?.error ?? statusPayload?.code
-      const failMsg = statusPayload?.message ?? failCode
-      const err = new Error(typeof failMsg === 'string' ? failMsg : 'Campaign generation failed')
-      if (failCode) err.code = String(failCode)
-      err.body = statusPayload
-      err.status = statusResponse.status
-      throw err
-    }
-
-    if (pollStatus === 'done') {
-      return statusPayload?.result ?? null
-    }
-  }
-
-  throw new Error('Generation timed out. Please try again.')
-}
-
 function BuilderPage() {
   const { securityEnabled = true, securityConfigLoaded = false } = useContext(SecurityConfigContext)
   const [state, setState] = useState(STATE.IDLE)
@@ -257,6 +219,11 @@ function BuilderPage() {
   const [formFieldErrors, setFormFieldErrors] = useState({ productName: null, productDescription: null })
   const [complianceRetryMessage, setComplianceRetryMessage] = useState(null)
   const [builder1RetryContext, setBuilder1RetryContext] = useState(null)
+  const [cancellationGate, setCancellationGate] = useState('ready')
+  const [initPhase, setInitPhase] = useState('checking')
+  const [ownershipError, setOwnershipError] = useState(null)
+  const [isPollDisconnected, setIsPollDisconnected] = useState(false)
+  const [campaignZipState, setCampaignZipState] = useState({ loading: false, error: null })
 
   const sidRef = useRef(null)
   const bootstrapCompleteRef = useRef(false)
@@ -420,15 +387,16 @@ function BuilderPage() {
 
   const displayLanguage = campaignSession?.campaign?.detectedLanguage === 'en' ? 'en' : 'he'
   const isGenerating = state === STATE.GENERATING || state === STATE.GENERATING_NEXT
-  const campaignComplete =
-    campaignSession != null &&
-    campaignSession.generatedCount >= campaignSession.targetAdCount
+  const campaignAuthoritativelyReady = isBuilder1CampaignAuthoritativelyReady(campaignSession)
+  const campaignDeliveryPending = isBuilder1CampaignDeliveryPending(campaignSession)
+  const campaignComplete = campaignAuthoritativelyReady
   const canRetryServerAd =
     Boolean(builder1RetryContext?.retryable && campaignSession?.campaignId)
   const canGenerateAgain =
     campaignSession != null &&
     (campaignSession.canGenerateNext || canRetryServerAd) &&
-    !campaignComplete
+    !campaignComplete &&
+    !campaignDeliveryPending
   const generateButtonLabel = getBuilder1GenerateButtonLabel({
     campaignComplete,
     hasGeneratedAds: Boolean(campaignSession?.generatedCount),
@@ -436,9 +404,13 @@ function BuilderPage() {
     retryable: canRetryServerAd
   })
   const generateButtonDisabled =
+    cancellationGate !== 'ready' ||
+    initPhase !== 'done' ||
     campaignComplete ||
     isGenerating ||
     generateRequestInFlightRef.current ||
+    Boolean(readBuilder1ActiveJob()) ||
+    Boolean(readBuilder1PendingMutation()) ||
     (Boolean(rateLimitState) && retryCountdown > 0)
 
   const generationProgressVisible = showProgressBar && !progressTaskFailed
@@ -505,13 +477,16 @@ function BuilderPage() {
     }
 
     pendingRevealRef.current = null
+    clearBuilder1ActiveJob()
+    clearBuilder1PendingMutation()
+    setIsPollDisconnected(false)
     clearProgressJobTiming()
     setProgressTaskSucceeded(false)
     setIsCompletingProgress(false)
     setProgressActive(false)
     setShowProgressBar(false)
     setState(STATE.SUCCESS)
-  }, [])
+  }, [clearProgressJobTiming])
 
   const queueSuccessfulReveal = useCallback((payload) => {
     pendingRevealRef.current = payload
@@ -523,8 +498,188 @@ function BuilderPage() {
     applyPendingReveal()
   }, [applyPendingReveal])
 
+  const resetFreshBuilder1Ui = useCallback(() => {
+    initialPollTokenRef.current += 1
+    nextPollTokenRef.current += 1
+    pendingRevealRef.current = null
+    generateRequestInFlightRef.current = false
+    clearProgressJobTiming(progressActiveJobIdRef.current)
+    setCampaignSession(null)
+    setState(STATE.IDLE)
+    setError(null)
+    setOwnershipError(null)
+    setBuilder1RetryContext(null)
+    setComplianceRetryMessage(null)
+    setRateLimitState(null)
+    setZipStateByAd({})
+    setCampaignZipState({ loading: false, error: null })
+    setIsPollDisconnected(false)
+    setProgressTaskFailed(false)
+    setProgressTaskSucceeded(false)
+    setIsCompletingProgress(false)
+    setProgressActive(false)
+    setShowProgressBar(false)
+    setStageLabel('')
+  }, [clearProgressJobTiming])
+
+  const handleBuilder1OwnershipFailure = useCallback(() => {
+    stopProgressWithFailure()
+    setOwnershipError(BUILDER1_MSG_OWNERSHIP)
+    setCancellationGate('blocked')
+    setFormFieldErrors({ productName: null, productDescription: null })
+    setError(null)
+    setState(STATE.ERROR)
+  }, [stopProgressWithFailure])
+
+  const handleBuilder1IdempotencyConflict = useCallback(() => {
+    stopProgressWithFailure()
+    setCancellationGate('blocked')
+    setError(BUILDER1_MSG_IDEMPOTENCY_CONFLICT)
+    setState(STATE.ERROR)
+  }, [stopProgressWithFailure])
+
+  const clearBuilder1RecoveryState = useCallback(() => {
+    clearBuilder1ActiveJob()
+    clearBuilder1PendingMutation()
+  }, [])
+
+  const shouldClearBuilder1ActiveJobOnError = useCallback((err) => {
+    const code = String(err?.code ?? '').toLowerCase()
+    if (code === 'generation_timeout') return false
+    if (err instanceof NetworkError || err?.isNetworkError) return false
+    return true
+  }, [])
+
+  useEffect(() => {
+    const onPageHide = () => {
+      const activeJob = readBuilder1ActiveJob()
+      if (!activeJob?.jobId) return
+      cancelBuilder1JobKeepalive(activeJob.jobId, { reason: 'frontend_refresh' })
+    }
+    window.addEventListener('pagehide', onPageHide)
+    return () => window.removeEventListener('pagehide', onPageHide)
+  }, [])
+
+  useEffect(() => {
+    ensureBuilder1OwnerContext()
+    resetFreshBuilder1Ui()
+
+    const pendingMutation = readBuilder1PendingMutation()
+    const activeJob = readBuilder1ActiveJob()
+
+    if (!isUnresolvedBuilder1PendingMutation(pendingMutation) && !activeJob?.jobId) {
+      setCancellationGate('ready')
+      setInitPhase('done')
+      return undefined
+    }
+
+    let cancelled = false
+    setCancellationGate('pending')
+    setInitPhase('cancelling')
+
+    ;(async () => {
+      let jobId = activeJob?.jobId ?? pendingMutation?.jobId ?? null
+
+      if (!jobId && pendingMutation?.requestId && pendingMutation.requestPayload) {
+        try {
+          const { response, payload } = await callBuilder1MutationWithRetry(() =>
+            replayBuilder1PendingMutation(pendingMutation)
+          )
+          if (cancelled) return
+
+          if (payload && isBuilder1IdempotencyConflict(payload, response.status)) {
+            setCancellationGate('blocked')
+            setError(BUILDER1_MSG_IDEMPOTENCY_CONFLICT)
+            setInitPhase('done')
+            return
+          }
+
+          if (!response.ok && response.status !== 202) {
+            setCancellationGate('blocked')
+            setError(BUILDER1_MSG_CANCEL_BLOCKED)
+            setInitPhase('done')
+            return
+          }
+
+          const extracted = extractBuilder1MutationJobIds(payload)
+          jobId = extracted.jobId
+          if (!jobId) {
+            setCancellationGate('blocked')
+            setError(BUILDER1_MSG_CANCEL_BLOCKED)
+            setInitPhase('done')
+            return
+          }
+
+          updateBuilder1PendingMutation({
+            jobId,
+            campaignId: extracted.campaignId ?? pendingMutation.campaignId
+          })
+          writeBuilder1ActiveJob({
+            jobId,
+            campaignId: extracted.campaignId ?? pendingMutation.campaignId,
+            operation: pendingMutation.operation,
+            requestId: pendingMutation.requestId,
+            startedAtMs: pendingMutation.createdAtMs
+          })
+        } catch (err) {
+          if (cancelled) return
+          if (err?.isIdempotencyConflict) {
+            setCancellationGate('blocked')
+            setError(BUILDER1_MSG_IDEMPOTENCY_CONFLICT)
+            setInitPhase('done')
+            return
+          }
+          if (err?.isOwnershipError) {
+            setOwnershipError(BUILDER1_MSG_OWNERSHIP)
+            setCancellationGate('blocked')
+            setInitPhase('done')
+            return
+          }
+          setCancellationGate('blocked')
+          setError(BUILDER1_MSG_CANCEL_BLOCKED)
+          setInitPhase('done')
+          return
+        }
+      }
+
+      if (!jobId) {
+        setCancellationGate('blocked')
+        setError(BUILDER1_MSG_CANCEL_BLOCKED)
+        setInitPhase('done')
+        return
+      }
+
+      const result = await cancelBuilder1Job(jobId, { reason: 'frontend_refresh' })
+      if (cancelled) return
+
+      if (result?.isOwnershipError) {
+        setOwnershipError(BUILDER1_MSG_OWNERSHIP)
+        setCancellationGate('blocked')
+        setInitPhase('done')
+        return
+      }
+
+      if (isBuilder1CancelAcknowledged(result)) {
+        clearBuilder1RecoveryState()
+        clearBuilder1JobStartTime(jobId)
+        setCancellationGate('ready')
+      } else {
+        setCancellationGate('blocked')
+        setError(BUILDER1_MSG_CANCEL_BLOCKED)
+      }
+      setInitPhase('done')
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [resetFreshBuilder1Ui, clearBuilder1RecoveryState])
+
   const handleInitialSubmit = async (data) => {
     if (generateRequestInFlightRef.current) return
+    if (cancellationGate !== 'ready' || initPhase !== 'done') return
+    if (readBuilder1ActiveJob()) return
+    if (readBuilder1PendingMutation()) return
 
     if (!BUILDER1_ACCESS_GUARD_DISABLED && !securityConfigLoaded) return
     if (
@@ -589,6 +744,7 @@ function BuilderPage() {
     const applyGenerationFormError = (err) => {
       const resolved = resolveBuilder1GenerationFormError(err, 'he')
       stopProgressWithFailure()
+      clearBuilder1PendingMutation()
       setFieldsLocked(false)
       if (resolved?.field === 'productName') {
         setFormFieldErrors({ productName: resolved.message, productDescription: null })
@@ -607,33 +763,46 @@ function BuilderPage() {
       setState(STATE.ERROR)
     }
 
+    const requestId = createBuilder1RequestId()
+    writeBuilder1PendingMutation({
+      requestId,
+      operation: 'initial',
+      requestPayload: requestBody,
+      createdAtMs: Date.now(),
+      jobId: null,
+      campaignId: null
+    })
+
     try {
       let response
+      let createResponse
       try {
-        response = await fetch(`${API_BASE_URL}/api/builder1-generate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        })
+        ;({ response, payload: createResponse } = await callBuilder1MutationWithRetry(() =>
+          builder1Generate(requestBody, { requestId })
+        ))
       } catch (fetchErr) {
-        if (
-          fetchErr instanceof TypeError ||
-          String(fetchErr?.message ?? '').includes('fetch') ||
-          String(fetchErr?.message ?? '').includes('Network')
-        ) {
-          throw new NetworkError('Network error: Unable to connect to server')
+        if (fetchErr?.isIdempotencyConflict) {
+          handleBuilder1IdempotencyConflict()
+          return
         }
-        throw fetchErr
+        if (fetchErr?.isOwnershipError) {
+          handleBuilder1OwnershipFailure()
+          return
+        }
+        stopProgressWithFailure()
+        setError(mapUserFacingError(fetchErr, fetchErr?.code))
+        setState(STATE.ERROR)
+        return
       }
-
-      const createResponse = await response.json().catch(() => null)
       if (!response.ok && response.status !== 202) {
+        if (isBuilder1IdempotencyConflict(createResponse, response.status)) {
+          handleBuilder1IdempotencyConflict()
+          return
+        }
         const retryOutcome = resolveBuilder1RetryErrorResponse(createResponse, campaignSession, 'he')
         if (retryOutcome) {
           stopProgressWithFailure()
+          clearBuilder1PendingMutation()
           if (retryOutcome.retryContext) {
             setBuilder1RetryContext(retryOutcome.retryContext)
           }
@@ -663,12 +832,17 @@ function BuilderPage() {
         throw new Error(errStr || `Server error: ${response.status}`)
       }
 
-      const jobId = createResponse?.jobId
-      if (!jobId || typeof jobId !== 'string' || !jobId.trim()) {
+      const mutationIds = extractBuilder1MutationJobIds(createResponse)
+      const jobId = mutationIds.jobId
+      if (!jobId) {
         throw new Error('Error creating campaign: missing jobId')
       }
 
       const trimmedJobId = jobId.trim()
+      updateBuilder1PendingMutation({
+        jobId: trimmedJobId,
+        campaignId: mutationIds.campaignId
+      })
       const resolvedStartMs = resolveBuilder1JobStartTime(
         trimmedJobId,
         progressJobStartMsRef.current ?? Date.now()
@@ -677,15 +851,36 @@ function BuilderPage() {
       progressJobStartMsRef.current = resolvedStartMs
       setProgressJobStartMs(resolvedStartMs)
 
+      writeBuilder1ActiveJob({
+        jobId: trimmedJobId,
+        campaignId: mutationIds.campaignId ?? campaignSession?.campaignId ?? null,
+        operation: 'initial',
+        requestId,
+        startedAtMs: resolvedStartMs
+      })
+
       const rawResult = await pollBuilder1Job({
         jobId: trimmedJobId,
-        pollToken,
         isStale: () => initialPollTokenRef.current !== pollToken || !mountedRef.current,
-        mode: 'initial',
-        progressCtx: { adIndex: 1, targetAdCount: adCount, language: 'he' }
+        onStage: (stage) => {
+          if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+          setStageLabel(
+            getStageLabel(
+              { stage, status: 'running' },
+              'he',
+              'initial',
+              { adIndex: 1, targetAdCount: adCount, language: 'he' }
+            )
+          )
+        },
+        onTransientError: () => {
+          if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+          setIsPollDisconnected(true)
+        }
       })
 
       if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+      setIsPollDisconnected(false)
 
       const validated = validateInitialCampaignResponse(rawResult, adCount)
       if (!validated.ok) {
@@ -709,6 +904,16 @@ function BuilderPage() {
     } catch (err) {
       if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
 
+      if (err?.isIdempotencyConflict) {
+        handleBuilder1IdempotencyConflict()
+        return
+      }
+
+      if (err?.isOwnershipError) {
+        handleBuilder1OwnershipFailure()
+        return
+      }
+
       const generationFormErr = resolveBuilder1GenerationFormError(err, 'he')
       if (generationFormErr) {
         applyGenerationFormError(err)
@@ -731,6 +936,7 @@ function BuilderPage() {
           setState(STATE.ERROR)
           return
         }
+        clearBuilder1PendingMutation()
         const sessionResult = createCampaignSessionFromInitial(mock, adCount)
         queueSuccessfulReveal({
           type: 'initial',
@@ -747,6 +953,7 @@ function BuilderPage() {
       const retryOutcome = resolveBuilder1RetryErrorResponse(err?.body, campaignSession, 'he')
       if (retryOutcome) {
         stopProgressWithFailure()
+        clearBuilder1PendingMutation()
         if (retryOutcome.retryContext) {
           setBuilder1RetryContext(retryOutcome.retryContext)
         }
@@ -757,6 +964,9 @@ function BuilderPage() {
       }
 
       stopProgressWithFailure()
+      if (shouldClearBuilder1ActiveJobOnError(err)) {
+        clearBuilder1RecoveryState()
+      }
       setCampaignSession(null)
       setBuilder1RetryContext(null)
       setError(mapUserFacingError(err))
@@ -770,6 +980,9 @@ function BuilderPage() {
 
   const handleGenerateNextAd = async () => {
     if (!campaignSession || generateRequestInFlightRef.current || isGenerating) return
+    if (cancellationGate !== 'ready' || initPhase !== 'done') return
+    if (readBuilder1ActiveJob()) return
+    if (readBuilder1PendingMutation()) return
 
     const activeSession = campaignSession
     const activeRetryContext = builder1RetryContext
@@ -792,6 +1005,7 @@ function BuilderPage() {
       const outcome = resolveBuilder1RetryErrorResponse(body, activeSession, displayLanguage)
       if (!outcome) return false
       stopProgressWithFailure()
+      clearBuilder1PendingMutation()
       if (outcome.retryContext) {
         setBuilder1RetryContext(outcome.retryContext)
       }
@@ -812,31 +1026,50 @@ function BuilderPage() {
       expectedNextIndex: expectedIndex
     })
 
+    const nextOperation = isServerRetry
+      ? activeRetryContext.retryMode === BUILDER1_RETRY_MODE.REPAIR_FROM_PHYSICAL
+        ? 'repair'
+        : 'retry'
+      : 'next'
+
+    const requestId = createBuilder1RequestId()
+    writeBuilder1PendingMutation({
+      requestId,
+      operation: nextOperation,
+      requestPayload: nextPayload,
+      createdAtMs: Date.now(),
+      jobId: null,
+      campaignId: activeSession.campaignId
+    })
+
     try {
       let response
+      let createResponse
       try {
-        response = await fetch(`${API_BASE_URL}/api/builder1-generate-next`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify(nextPayload)
-        })
+        ;({ response, payload: createResponse } = await callBuilder1MutationWithRetry(() =>
+          builder1GenerateNext(nextPayload, { requestId })
+        ))
       } catch (fetchErr) {
-        if (
-          fetchErr instanceof TypeError ||
-          String(fetchErr?.message ?? '').includes('fetch') ||
-          String(fetchErr?.message ?? '').includes('Network')
-        ) {
-          throw new NetworkError('Network error: Unable to connect to server')
+        if (fetchErr?.isIdempotencyConflict) {
+          handleBuilder1IdempotencyConflict()
+          return
         }
-        throw fetchErr
+        if (fetchErr?.isOwnershipError) {
+          handleBuilder1OwnershipFailure()
+          return
+        }
+        stopProgressWithFailure()
+        setError(mapUserFacingError(fetchErr, fetchErr?.code))
+        setState(STATE.SUCCESS)
+        return
       }
-
-      const createResponse = await response.json().catch(() => null)
       if (!response.ok && response.status !== 202) {
+        if (isBuilder1IdempotencyConflict(createResponse, response.status)) {
+          handleBuilder1IdempotencyConflict()
+          return
+        }
         if (applyRetryErrorIfPresent(createResponse)) {
+          clearBuilder1PendingMutation()
           return
         }
         const msg = createResponse?.message ?? createResponse?.error
@@ -861,12 +1094,17 @@ function BuilderPage() {
         throw Object.assign(new Error(errStr), { code: errCode, body: createResponse })
       }
 
-      const jobId = createResponse?.jobId
-      if (!jobId || typeof jobId !== 'string' || !jobId.trim()) {
+      const mutationIds = extractBuilder1MutationJobIds(createResponse)
+      const jobId = mutationIds.jobId
+      if (!jobId) {
         throw new Error('Error creating next ad: missing jobId')
       }
 
       const trimmedJobId = jobId.trim()
+      updateBuilder1PendingMutation({
+        jobId: trimmedJobId,
+        campaignId: mutationIds.campaignId ?? activeSession.campaignId
+      })
       const resolvedStartMs = resolveBuilder1JobStartTime(
         trimmedJobId,
         progressJobStartMsRef.current ?? Date.now()
@@ -875,19 +1113,29 @@ function BuilderPage() {
       progressJobStartMsRef.current = resolvedStartMs
       setProgressJobStartMs(resolvedStartMs)
 
+      writeBuilder1ActiveJob({
+        jobId: trimmedJobId,
+        campaignId: mutationIds.campaignId ?? activeSession.campaignId,
+        operation: nextOperation,
+        requestId,
+        startedAtMs: resolvedStartMs
+      })
+
       const rawResult = await pollBuilder1Job({
         jobId: trimmedJobId,
-        pollToken,
         isStale: () => nextPollTokenRef.current !== pollToken || !mountedRef.current,
-        mode: 'next',
-        progressCtx,
         onStage: (stage) => {
           if (nextPollTokenRef.current !== pollToken || !mountedRef.current) return
           setStageLabel(getStageLabel({ stage, status: 'running' }, displayLanguage, 'next', progressCtx))
+        },
+        onTransientError: () => {
+          if (nextPollTokenRef.current !== pollToken || !mountedRef.current) return
+          setIsPollDisconnected(true)
         }
       })
 
       if (nextPollTokenRef.current !== pollToken || !mountedRef.current) return
+      setIsPollDisconnected(false)
 
       const validated = validateNextAdResponse(rawResult, {
         campaignId: activeSession.campaignId,
@@ -909,6 +1157,16 @@ function BuilderPage() {
       })
     } catch (err) {
       if (nextPollTokenRef.current !== pollToken || !mountedRef.current) return
+
+      if (err?.isIdempotencyConflict) {
+        handleBuilder1IdempotencyConflict()
+        return
+      }
+
+      if (err?.isOwnershipError) {
+        handleBuilder1OwnershipFailure()
+        return
+      }
 
       if (applyRetryErrorIfPresent(err?.body)) {
         return
@@ -935,6 +1193,7 @@ function BuilderPage() {
         const mock = createDevMockNextAd(activeSession, expectedIndex)
         const appendResult = appendAdToSession(activeSession, mock)
         if (appendResult.ok) {
+          clearBuilder1PendingMutation()
           queueSuccessfulReveal({
             type: 'next',
             session: appendResult.session,
@@ -945,6 +1204,9 @@ function BuilderPage() {
       }
 
       stopProgressWithFailure()
+      if (shouldClearBuilder1ActiveJobOnError(err)) {
+        clearBuilder1RecoveryState()
+      }
       setError(mapUserFacingError(err, err?.code))
       setState(STATE.SUCCESS)
     } finally {
@@ -955,6 +1217,9 @@ function BuilderPage() {
   }
 
   const handleFormSubmit = (data) => {
+    if (cancellationGate !== 'ready' || initPhase !== 'done') return
+    if (readBuilder1ActiveJob() && !isGenerating) return
+    if (readBuilder1PendingMutation()) return
     if (campaignComplete && !builder1RetryContext?.retryable) return
     if (builder1RetryContext?.retryable && campaignSession?.campaignId) {
       handleGenerateNextAd()
@@ -985,14 +1250,7 @@ function BuilderPage() {
 
     try {
       const payload = buildSingleAdZipRequest(campaignSession, ad)
-      const response = await fetch(`${API_BASE_URL}/api/builder1-zip`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/zip, application/octet-stream, */*'
-        },
-        body: JSON.stringify(payload)
-      })
+      const response = await builder1DownloadZip(payload)
 
       if (!response.ok) {
         const errBody = await response.json().catch(async () => {
@@ -1018,13 +1276,61 @@ function BuilderPage() {
         [adIndex]: { loading: false, error: null }
       }))
     } catch (downloadErr) {
+      if (downloadErr?.isOwnershipError) {
+        setOwnershipError(BUILDER1_MSG_OWNERSHIP)
+        setCancellationGate('blocked')
+      }
       setZipStateByAd((prev) => ({
         ...prev,
         [adIndex]: {
           loading: false,
-          error: mapUserFacingError(downloadErr)
+          error: downloadErr?.isOwnershipError
+            ? BUILDER1_MSG_OWNERSHIP
+            : mapUserFacingError(downloadErr)
         }
       }))
+    }
+  }
+
+  const handleDownloadCampaignZip = async () => {
+    if (!campaignSession || !campaignAuthoritativelyReady) return
+    setCampaignZipState({ loading: true, error: null })
+
+    try {
+      const payload = buildCampaignServerZipRequest(campaignSession)
+      const response = await builder1DownloadZip(payload)
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(async () => {
+          const errText = await response.text().catch(() => '')
+          return { message: errText || `Server error: ${response.status}` }
+        })
+        const msg = errBody?.message || errBody?.error || `Server error: ${response.status}`
+        throw new Error(typeof msg === 'string' ? msg : 'Download failed')
+      }
+
+      const zipBlob = await response.blob()
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = sanitizeCampaignZipFilename(campaignSession.campaignId)
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      setCampaignZipState({ loading: false, error: null })
+    } catch (downloadErr) {
+      if (downloadErr?.isOwnershipError) {
+        setOwnershipError(BUILDER1_MSG_OWNERSHIP)
+        setCancellationGate('blocked')
+      }
+      setCampaignZipState({
+        loading: false,
+        error: downloadErr?.isOwnershipError
+          ? BUILDER1_MSG_OWNERSHIP
+          : mapUserFacingError(downloadErr)
+      })
     }
   }
 
@@ -1051,6 +1357,26 @@ function BuilderPage() {
           (אין לרענן את הדף)
         </span>
       </div>
+
+      {initPhase === 'cancelling' ? (
+        <p className="builder-cancellation-notice" role="status" dir="rtl">
+          {BUILDER1_MSG_CANCELLING}
+        </p>
+      ) : null}
+
+      {cancellationGate === 'blocked' ? (
+        <p className="builder-cancellation-notice builder-cancellation-blocked" role="alert" dir="rtl">
+          {ownershipError || error || BUILDER1_MSG_CANCEL_BLOCKED}
+        </p>
+      ) : null}
+
+      {isPollDisconnected && isGenerating ? (
+        <p className="builder-poll-disconnected-notice" role="status" dir="rtl">
+          {displayLanguage === 'he'
+            ? 'חיבור זמני נותק — ממשיכים לעקוב…'
+            : 'Connection interrupted — still tracking progress…'}
+        </p>
+      ) : null}
 
       <ProductForm
         formData={formData}
@@ -1126,6 +1452,36 @@ function BuilderPage() {
               />
             ))}
           </div>
+
+          {campaignDeliveryPending ? (
+            <p className="builder-campaign-not-ready" role="alert" dir="rtl">
+              {BUILDER1_MSG_CAMPAIGN_NOT_READY}
+            </p>
+          ) : null}
+
+          {campaignAuthoritativelyReady ? (
+            <>
+              <button
+                type="button"
+                className="builder-campaign-download"
+                onClick={handleDownloadCampaignZip}
+                disabled={campaignZipState.loading}
+              >
+                {campaignZipState.loading
+                  ? displayLanguage === 'he'
+                    ? 'מוריד ZIP…'
+                    : 'Downloading ZIP…'
+                  : displayLanguage === 'he'
+                    ? 'הורד ZIP קמפיין'
+                    : 'Download campaign ZIP'}
+              </button>
+              {campaignZipState.error ? (
+                <p className="builder-campaign-download-error" role="alert">
+                  {campaignZipState.error}
+                </p>
+              ) : null}
+            </>
+          ) : null}
         </section>
       )}
 

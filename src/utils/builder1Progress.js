@@ -169,30 +169,47 @@ export function computeBuilder1CompletionProgress(fromPercent, elapsedInCompleti
 }
 
 /**
- * Approximate remaining-time copy for initial campaign (local estimate only).
+ * @param {number} remainingMs
+ */
+export function formatBuilder1RemainingClock(remainingMs) {
+  const safeSec = Math.max(0, Math.floor(Number(remainingMs) / 1000))
+  const minutes = Math.floor(safeSec / 60)
+  const seconds = safeSec % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+/**
+ * Second-level remaining clock for Builder1 progress (local estimate only).
+ * @param {number} elapsedMs
+ * @param {number} estimatedDurationMs
+ * @param {'he'|'en'} [language='he']
+ */
+export function getBuilder1RemainingTimeText(
+  elapsedMs,
+  estimatedDurationMs = BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
+  language = 'he'
+) {
+  const isHe = language === 'he'
+  const safeElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0
+  const total = Number.isFinite(estimatedDurationMs) && estimatedDurationMs > 0
+    ? estimatedDurationMs
+    : BUILDER1_INITIAL_ESTIMATED_DURATION_MS
+
+  if (safeElapsed >= total) {
+    return '00:00'
+  }
+
+  const remainingMs = Math.max(0, total - safeElapsed)
+  return formatBuilder1RemainingClock(remainingMs)
+}
+
+/**
+ * @deprecated Use getBuilder1RemainingTimeText — kept for legacy tests.
  * @param {number} elapsedMs
  * @param {'he'|'en'} [language='he']
  */
 export function getBuilder1InitialRemainingTimeText(elapsedMs, language = 'he') {
-  const isHe = language === 'he'
-  const safeElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0
-
-  if (safeElapsed >= BUILDER1_INITIAL_ESTIMATED_DURATION_MS) {
-    return isHe
-      ? 'הקמפיין עדיין בעבודה — מסיימים את הפרטים האחרונים'
-      : 'Your campaign is still in progress — finishing the final details'
-  }
-
-  const remainingMs = Math.max(0, BUILDER1_INITIAL_ESTIMATED_DURATION_MS - safeElapsed)
-  if (remainingMs < 60_000) {
-    return isHe ? 'נותרה פחות מדקה לפי ההערכה' : 'Less than a minute left by estimate'
-  }
-
-  const remainingMinutes = Math.ceil(remainingMs / 60_000)
-  if (isHe) {
-    return `נותרו כ־${remainingMinutes} דקות`
-  }
-  return `About ${remainingMinutes} minutes left`
+  return getBuilder1RemainingTimeText(elapsedMs, BUILDER1_INITIAL_ESTIMATED_DURATION_MS, language)
 }
 
 /**
@@ -205,10 +222,32 @@ export function formatBuilder1InitialProgressStatusLine(remainingTimeText, langu
   const headline = isHe ? BUILDER1_INITIAL_PROGRESS_HEADLINE_HE : BUILDER1_INITIAL_PROGRESS_HEADLINE_EN
   const estimate = isHe ? BUILDER1_INITIAL_PROGRESS_ESTIMATE_HE : BUILDER1_INITIAL_PROGRESS_ESTIMATE_EN
   const remaining = String(remainingTimeText ?? '').trim()
+  const remainingLabel = isHe ? 'זמן שנותר: ' : 'Remaining: '
   if (!remaining) {
     return `${headline}${BUILDER1_INITIAL_PROGRESS_SEPARATOR}${estimate}`
   }
-  return `${headline}${BUILDER1_INITIAL_PROGRESS_SEPARATOR}${estimate}${BUILDER1_INITIAL_PROGRESS_SEPARATOR}${remaining}`
+  return `${headline}${BUILDER1_INITIAL_PROGRESS_SEPARATOR}${estimate}${BUILDER1_INITIAL_PROGRESS_SEPARATOR}${remainingLabel}${remaining}`
+}
+
+/**
+ * Next-ad progress status line with MM:SS countdown.
+ * @param {string} remainingTimeText
+ * @param {string} [stageLabel='']
+ * @param {'he'|'en'} [language='he']
+ */
+export function formatBuilder1NextAdProgressStatusLine(
+  remainingTimeText,
+  stageLabel = '',
+  language = 'he'
+) {
+  const isHe = language === 'he'
+  const remaining = String(remainingTimeText ?? '').trim()
+  const remainingLabel = isHe ? 'זמן שנותר: ' : 'Remaining: '
+  const stage = String(stageLabel ?? '').trim()
+  const parts = []
+  if (stage) parts.push(stage)
+  if (remaining) parts.push(`${remainingLabel}${remaining}`)
+  return parts.join(BUILDER1_INITIAL_PROGRESS_SEPARATOR)
 }
 
 /**

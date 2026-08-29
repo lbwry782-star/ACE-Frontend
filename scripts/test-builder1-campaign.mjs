@@ -64,6 +64,9 @@ import {
   resolveBuilder1ProgressFrame,
   normalizeBuilder1ProgressPercent,
   getBuilder1InitialRemainingTimeText,
+  getBuilder1RemainingTimeText,
+  formatBuilder1RemainingClock,
+  formatBuilder1NextAdProgressStatusLine,
   resolveBuilder1JobStartTime,
   clearBuilder1JobStartTime,
   clearAllBuilder1JobStartTimes,
@@ -234,11 +237,12 @@ assert.match(builderPageSource, /generateButtonDisabled/)
 // 12. 429 does not produce CONSUMED
 assert.equal(getBuilder1GenerateButtonLabel({ campaignComplete: false, hasGeneratedAds: true, canGenerateNext: true }), 'GENERATE AGAIN')
 
-// Endpoints
-assert.match(builderPageSource, /\/api\/builder1-generate/)
-assert.match(builderPageSource, /\/api\/builder1-generate-next/)
+// Endpoints — Builder1 API client (not raw fetch in page)
+assert.match(builderPageSource, /builder1Generate/)
+assert.match(builderPageSource, /builder1GenerateNext/)
+assert.match(builderPageSource, /builder1DownloadZip/)
 assert.doesNotMatch(builderPageSource, /builder1-download-zip/)
-assert.match(builderPageSource, /\/api\/builder1-zip/)
+assert.match(builderPageSource, /buildCampaignServerZipRequest/)
 
 // 13–18. AdCard layout
 const adCardSource = readFileSync(join(root, 'src/components/AdCard/AdCard.jsx'), 'utf8')
@@ -487,7 +491,7 @@ assert.match(builderPageSource, /BUILDER1_PRODUCT_NAME_GENERATION_FAILED/)
 assert.match(builderPageSource, /getBuilder1ProductNameGenerationFailedMessage/)
 const mapErrorFn = builderPageSource.slice(
   builderPageSource.indexOf('function mapUserFacingError'),
-  builderPageSource.indexOf('async function pollBuilder1Job')
+  builderPageSource.indexOf('function BuilderPage')
 )
 assert.match(mapErrorFn, /BUILDER1_PRODUCT_NAME_GENERATION_FAILED[\s\S]*getBuilder1ProductNameGenerationFailedMessage/)
 const nameGenFailedIdx = mapErrorFn.indexOf('BUILDER1_PRODUCT_NAME_GENERATION_FAILED')
@@ -612,8 +616,8 @@ assert.match(nextAdBlock, /applyRetryErrorIfPresent/)
 assert.match(nextAdBlock, /setBuilder1RetryContext/)
 assert.match(nextAdBlock, /buildBuilder1GenerateNextPayload/)
 assert.match(nextAdBlock, /expectedNextIndex: expectedIndex/)
-assert.match(nextAdBlock, /builder1-generate-next/)
-assert.doesNotMatch(nextAdBlock, /\/api\/builder1-generate[^-]/)
+assert.match(nextAdBlock, /builder1GenerateNext/)
+assert.doesNotMatch(nextAdBlock, /builder1Generate[^N]/)
 assert.match(builderPageSource, /builder-compliance-retry-panel/)
 assert.match(nextAdBlock, /BUILDER1_PROGRESS_OPERATION\.NEXT_AD/)
 assert.match(nextAdBlock, /getBuilder1RetryModeProgressLabel/)
@@ -761,26 +765,26 @@ assert.doesNotMatch(progressBarSource, /<br/i)
 assert.match(progressCss, /builder1-progress-status-line[\s\S]*white-space:\s*nowrap/)
 assert.match(progressCss, /builder1-progress-status-line[\s\S]*text-align:\s*center/)
 assert.match(progressCss, /builder1-progress-status-line[\s\S]*direction:\s*rtl/)
-assert.match(progressBarSource, /getBuilder1InitialRemainingTimeText/)
+assert.match(progressBarSource, /getBuilder1RemainingTimeText/)
+assert.match(progressBarSource, /formatBuilder1NextAdProgressStatusLine/)
 assert.match(progressBarSource, /BUILDER1_PROGRESS_OPERATION\.INITIAL_CAMPAIGN/)
 
-const singleLine = formatBuilder1InitialProgressStatusLine('נותרו כ־10 דקות')
-assert.match(singleLine, /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · נותרו כ־10 דקות/)
+const singleLine = formatBuilder1InitialProgressStatusLine('10:00')
+assert.match(singleLine, /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · זמן שנותר: 10:00/)
 assert.doesNotMatch(singleLine, /\n/)
-const overdueLine = formatBuilder1InitialProgressStatusLine(
-  'הקמפיין עדיין בעבודה — מסיימים את הפרטים האחרונים'
-)
+const overdueLine = formatBuilder1InitialProgressStatusLine('00:00')
 assert.match(
   overdueLine,
-  /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · הקמפיין עדיין בעבודה — מסיימים את הפרטים האחרונים/
+  /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · זמן שנותר: 00:00/
 )
 
 const initialPollBlock = builderPageSource.slice(
-  builderPageSource.indexOf("mode: 'initial'"),
-  builderPageSource.indexOf('validateInitialCampaignResponse')
+  builderPageSource.indexOf('const handleInitialSubmit'),
+  builderPageSource.indexOf('const handleGenerateNextAd')
 )
-assert.doesNotMatch(initialPollBlock, /getStageLabel/)
-assert.doesNotMatch(initialPollBlock, /מתכנן/)
+assert.match(initialPollBlock, /writeBuilder1ActiveJob/)
+assert.match(initialPollBlock, /pollBuilder1Job/)
+assert.match(initialPollBlock, /onTransientError/)
 assert.doesNotMatch(builderPageSource, /4 דק/)
 assert.doesNotMatch(builderPageSource, /6–8/)
 assert.doesNotMatch(progressBarSource, /4 דק/)
@@ -789,18 +793,21 @@ assert.match(builderPageSource, /resolveBuilder1JobStartTime/)
 assert.match(builderPageSource, /clearProgressJobTiming/)
 assert.match(builderPageSource, /progressOperationType/)
 
-// Remaining-time text — never negative, overdue message after estimate
-assert.equal(getBuilder1InitialRemainingTimeText(0), 'נותרו כ־10 דקות')
-assert.equal(getBuilder1InitialRemainingTimeText(20_000), 'נותרו כ־10 דקות')
-assert.equal(getBuilder1InitialRemainingTimeText(70_000), 'נותרו כ־9 דקות')
-assert.equal(getBuilder1InitialRemainingTimeText(320_000), 'נותרו כ־5 דקות')
-assert.equal(getBuilder1InitialRemainingTimeText(541_000), 'נותרה פחות מדקה לפי ההערכה')
-assert.equal(
-  getBuilder1InitialRemainingTimeText(600_000),
-  'הקמפיין עדיין בעבודה — מסיימים את הפרטים האחרונים'
-)
+// Remaining-time text — MM:SS countdown, monotonic, never negative
+assert.equal(getBuilder1InitialRemainingTimeText(0), '10:00')
+assert.equal(getBuilder1InitialRemainingTimeText(20_000), '09:40')
+assert.equal(getBuilder1InitialRemainingTimeText(70_000), '08:50')
+assert.equal(getBuilder1InitialRemainingTimeText(320_000), '04:40')
+assert.equal(getBuilder1InitialRemainingTimeText(541_000), '00:59')
+assert.equal(getBuilder1InitialRemainingTimeText(600_000), '00:00')
+assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '01:00')
+assert.equal(getBuilder1RemainingTimeText(10_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:50')
+assert.equal(getBuilder1RemainingTimeText(30_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:30')
+assert.equal(getBuilder1RemainingTimeText(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:00')
+assert.equal(formatBuilder1RemainingClock(605_000), '10:05')
 for (const sample of [0, 30_000, 600_000, 900_000]) {
   assert.doesNotMatch(getBuilder1InitialRemainingTimeText(sample), /-/)
+  assert.match(getBuilder1InitialRemainingTimeText(sample), /^\d{2}:\d{2}$/)
 }
 
 // Job start timestamps isolated per job ID

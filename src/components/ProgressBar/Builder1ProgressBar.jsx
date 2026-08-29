@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import {
   resolveBuilder1ProgressFrame,
   normalizeBuilder1ProgressPercent,
-  getBuilder1InitialRemainingTimeText,
+  getBuilder1RemainingTimeText,
   formatBuilder1InitialProgressStatusLine,
+  formatBuilder1NextAdProgressStatusLine,
   BUILDER1_PROGRESS_OPERATION
 } from '../../utils/builder1Progress'
 import './builder1-progress.css'
@@ -38,6 +39,7 @@ function Builder1ProgressBar({
   const progressLanguageRef = useRef(progressLanguage)
   const jobStartTimeMsRef = useRef(jobStartTimeMs)
   const onRevealReadyRef = useRef(onRevealReady)
+  const stageLabelRef = useRef(stageLabel)
 
   visibleRef.current = visible
   taskSucceededRef.current = taskSucceeded
@@ -47,6 +49,7 @@ function Builder1ProgressBar({
   progressLanguageRef.current = progressLanguage
   jobStartTimeMsRef.current = jobStartTimeMs
   onRevealReadyRef.current = onRevealReady
+  stageLabelRef.current = stageLabel
 
   const isInitialCampaign = progressOperationType === BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN
 
@@ -59,9 +62,9 @@ function Builder1ProgressBar({
     revealCalledRef.current = false
     lastRemainingSecondRef.current = -1
     setRemainingTimeText(
-      isInitialCampaign ? getBuilder1InitialRemainingTimeText(0, progressLanguage) : ''
+      getBuilder1RemainingTimeText(0, estimatedDurationMs, progressLanguage)
     )
-  }, [progressKey, isInitialCampaign, progressLanguage])
+  }, [progressKey, estimatedDurationMs, progressLanguage])
 
   useEffect(() => {
     if (rafRef.current) {
@@ -105,6 +108,7 @@ function Builder1ProgressBar({
       const elapsedMs = resolveElapsedMs()
       const estimate = estimatedDurationRef.current
       const operationType = operationTypeRef.current
+      const language = progressLanguageRef.current
 
       if (
         taskSucceededRef.current &&
@@ -139,14 +143,13 @@ function Builder1ProgressBar({
       progressRef.current = nextPercent
       setDisplayProgress(nextPercent)
 
-      if (operationType === BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN) {
-        const elapsedSecond = Math.floor(elapsedMs / 1000)
-        if (elapsedSecond !== lastRemainingSecondRef.current) {
-          lastRemainingSecondRef.current = elapsedSecond
-          setRemainingTimeText(
-            getBuilder1InitialRemainingTimeText(elapsedMs, progressLanguageRef.current)
-          )
-        }
+      const elapsedSecond = Math.floor(elapsedMs / 1000)
+      if (elapsedSecond !== lastRemainingSecondRef.current) {
+        lastRemainingSecondRef.current = elapsedSecond
+        const remainingText = taskSucceededRef.current
+          ? '00:00'
+          : getBuilder1RemainingTimeText(elapsedMs, estimate, language)
+        setRemainingTimeText(remainingText)
       }
 
       scheduleRevealIfReady(nextPercent)
@@ -183,9 +186,17 @@ function Builder1ProgressBar({
   }
 
   const safeProgress = normalizeBuilder1ProgressPercent(displayProgress)
+  const remainingFallback = getBuilder1RemainingTimeText(0, estimatedDurationMs, progressLanguage)
   const initialStatusLine = isInitialCampaign
     ? formatBuilder1InitialProgressStatusLine(
-        remainingTimeText || getBuilder1InitialRemainingTimeText(0, progressLanguage),
+        remainingTimeText || remainingFallback,
+        progressLanguage
+      )
+    : ''
+  const nextAdStatusLine = !isInitialCampaign
+    ? formatBuilder1NextAdProgressStatusLine(
+        remainingTimeText || remainingFallback,
+        stageLabel,
         progressLanguage
       )
     : ''
@@ -195,6 +206,14 @@ function Builder1ProgressBar({
       {isInitialCampaign ? (
         <p className="builder1-progress-status-line" dir="rtl" aria-live="polite">
           {initialStatusLine}
+        </p>
+      ) : nextAdStatusLine ? (
+        <p
+          className="builder1-progress-status-line builder1-progress-next-status-line"
+          dir={progressLanguage === 'he' ? 'rtl' : undefined}
+          aria-live="polite"
+        >
+          {nextAdStatusLine}
         </p>
       ) : stageLabel ? (
         <p
@@ -212,7 +231,7 @@ function Builder1ProgressBar({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(safeProgress)}
-        aria-label={isInitialCampaign ? initialStatusLine : stageLabel || 'Generation progress'}
+        aria-label={isInitialCampaign ? initialStatusLine : nextAdStatusLine || stageLabel}
       >
         <div className="builder1-progress-track">
           <div
