@@ -99,7 +99,8 @@ function Builder2ProgressBar({
       const timing = progressTimingRef.current
       const totalSeconds = timing?.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
       const stageFloor = timing?.stageFloor ?? 0
-      const elapsedSeconds = getBuilder2ElapsedSeconds(timing, now)
+      const wallNow = Date.now()
+      const elapsedSeconds = getBuilder2ElapsedSeconds(timing, wallNow)
 
       if (
         taskSucceededRef.current &&

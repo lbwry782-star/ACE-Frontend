@@ -13,7 +13,11 @@ import {
   computeBuilder2ProgressTarget,
   advanceBuilder2DisplayedProgress,
   resolveBuilder2ProgressFrame,
-  getBuilder2StageProgressFloor
+  getBuilder2StageProgressFloor,
+  getBuilder2ElapsedSeconds,
+  getBuilder2RemainingTimeText,
+  reconcileBuilder2JobTiming,
+  clearAllBuilder2JobStartTimes
 } from '../src/utils/builder2Progress.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -30,6 +34,87 @@ const builder1ProgressBarSource = readFileSync(
 )
 
 const TOTAL = BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
+const BUILDER2_DISPLAY_PROGRESS_SPEED_PER_SEC = 9
+
+function approx(actual, expected, tolerance = 0.15) {
+  assert.ok(
+    Math.abs(actual - expected) <= tolerance,
+    `expected ~${expected}, got ${actual}`
+  )
+}
+
+/**
+ * Mirrors Builder2ProgressBar RAF tick elapsed/progress/countdown logic.
+ * @param {object} options
+ */
+function simulateProgressBarFrames({
+  timing,
+  jobStartMs,
+  durationMs,
+  msPerFrame = 16,
+  rafBase = 1000,
+  onPollIntervalMs = null,
+  onPoll = null,
+  useWallClockForElapsed = true
+}) {
+  let activeTiming = timing
+  let displayProgress = 0
+  let remainingTimeText = getBuilder2RemainingTimeText(0, TOTAL)
+  let lastRemainingSecond = -1
+  let prevFrameMs = null
+  const frameCount = Math.floor(durationMs / msPerFrame)
+  const samples = {}
+
+  for (let f = 0; f <= frameCount; f++) {
+    const rafNow = rafBase + f * msPerFrame
+    const wallNow = jobStartMs + f * msPerFrame
+
+    if (
+      onPollIntervalMs != null &&
+      onPoll &&
+      f > 0 &&
+      f % Math.floor(onPollIntervalMs / msPerFrame) === 0
+    ) {
+      const nextTiming = onPoll(activeTiming)
+      if (nextTiming) {
+        activeTiming = nextTiming
+      }
+    }
+
+    const deltaMs =
+      prevFrameMs != null && Number.isFinite(prevFrameMs) ? Math.max(0, rafNow - prevFrameMs) : 16
+    prevFrameMs = rafNow
+    const maxStep = BUILDER2_DISPLAY_PROGRESS_SPEED_PER_SEC * (deltaMs / 1000)
+
+    const elapsedClock = useWallClockForElapsed ? wallNow : rafNow
+    const elapsedSeconds = getBuilder2ElapsedSeconds(activeTiming, elapsedClock)
+    const target = computeBuilder2ProgressTarget(
+      elapsedSeconds,
+      TOTAL,
+      activeTiming.stageFloor ?? 0,
+      false
+    )
+    displayProgress = advanceBuilder2DisplayedProgress(target, displayProgress, maxStep)
+
+    const elapsedSecond = Math.floor(elapsedSeconds)
+    if (elapsedSecond !== lastRemainingSecond) {
+      lastRemainingSecond = elapsedSecond
+      remainingTimeText = getBuilder2RemainingTimeText(elapsedSeconds, TOTAL)
+    }
+
+    const sec = Math.floor((f * msPerFrame) / 1000)
+    if ([0, 10, 30, 60].includes(sec) && samples[sec] == null) {
+      samples[sec] = {
+        elapsedSeconds,
+        target,
+        displayProgress,
+        remainingTimeText
+      }
+    }
+  }
+
+  return { samples, displayProgress, remainingTimeText }
+}
 
 function runFramesToward(target, from, frames, maxStep = 0.15) {
   let displayed = from
@@ -131,5 +216,93 @@ assert.doesNotMatch(
 // J. Builder1 unchanged
 assert.doesNotMatch(builder1ProgressBarSource, /computeBuilder2ProgressTarget/)
 assert.doesNotMatch(builder1ProgressBarSource, /advanceBuilder2DisplayedProgress/)
+
+// --- Component time-base regression (production RAF bug) ---
+
+assert.match(progressBarSource, /const wallNow = Date\.now\(\)/)
+assert.match(progressBarSource, /getBuilder2ElapsedSeconds\(timing, wallNow\)/)
+assert.doesNotMatch(
+  progressBarSource,
+  /getBuilder2ElapsedSeconds\(timing, now\)/
+)
+
+// Old bug: RAF timestamp vs epoch startMs → elapsed stuck at 0
+clearAllBuilder2JobStartTimes()
+const jobStartMs = 1_700_000_000_000
+const jobId = 'raf-time-base'
+let timing = reconcileBuilder2JobTiming(jobId, { progressStartedAt: jobStartMs }, jobStartMs)
+
+const buggy60 = simulateProgressBarFrames({
+  timing,
+  jobStartMs,
+  durationMs: 60_000,
+  useWallClockForElapsed: false
+})
+assert.equal(buggy60.samples[60]?.elapsedSeconds ?? 0, 0, 'RAF timestamp must reproduce frozen elapsed')
+assert.equal(buggy60.displayProgress, 0, 'RAF timestamp must reproduce frozen progress')
+
+// Fixed: wall-clock drives elapsed, progress, and countdown
+const fixed60 = simulateProgressBarFrames({
+  timing,
+  jobStartMs,
+  durationMs: 60_000,
+  useWallClockForElapsed: true
+})
+
+approx(fixed60.samples[10].elapsedSeconds, 10, 0.2)
+approx(fixed60.samples[10].target, 0.528, 0.1)
+assert.equal(fixed60.samples[10].remainingTimeText, 'זמן שנותר: 29:50')
+
+approx(fixed60.samples[30].elapsedSeconds, 30, 0.2)
+approx(fixed60.samples[30].target, 1.583, 0.15)
+assert.equal(fixed60.samples[30].remainingTimeText, 'זמן שנותר: 29:30')
+
+approx(fixed60.samples[60].elapsedSeconds, 60, 0.2)
+approx(fixed60.samples[60].target, 3.167, 0.15)
+assert.ok(fixed60.displayProgress > 0, 'displayProgress must exceed 0 after 60s')
+assert.equal(fixed60.samples[60].remainingTimeText, 'זמן שנותר: 29:00')
+
+// Repeated elapsedSeconds=0 polls — local wall clock continues
+clearAllBuilder2JobStartTimes()
+const zeroPollJobId = 'zero-poll-raf'
+timing = reconcileBuilder2JobTiming(
+  zeroPollJobId,
+  { progressStartedAt: jobStartMs },
+  jobStartMs
+)
+const zeroPollRun = simulateProgressBarFrames({
+  timing,
+  jobStartMs,
+  durationMs: 60_000,
+  useWallClockForElapsed: true,
+  onPollIntervalMs: 2000,
+  onPoll: () =>
+    reconcileBuilder2JobTiming(zeroPollJobId, { status: 'running', elapsedSeconds: 0 })
+})
+approx(zeroPollRun.samples[60].elapsedSeconds, 60, 0.2)
+assert.ok(zeroPollRun.displayProgress > 0)
+assert.equal(zeroPollRun.samples[60].remainingTimeText, 'זמן שנותר: 29:00')
+assert.equal(
+  reconcileBuilder2JobTiming(zeroPollJobId, {}).serverElapsedSeconds,
+  null
+)
+
+// No backend poll for 60 seconds — bar and clock still move
+clearAllBuilder2JobStartTimes()
+const noPollJobId = 'no-poll-raf'
+timing = reconcileBuilder2JobTiming(
+  noPollJobId,
+  { progressStartedAt: jobStartMs },
+  jobStartMs
+)
+const noPollRun = simulateProgressBarFrames({
+  timing,
+  jobStartMs,
+  durationMs: 60_000,
+  useWallClockForElapsed: true
+})
+approx(noPollRun.samples[60].elapsedSeconds, 60, 0.2)
+assert.ok(noPollRun.displayProgress > 0)
+assert.equal(noPollRun.samples[60].remainingTimeText, 'זמן שנותר: 29:00')
 
 console.log('builder2 progress animation tests passed')
