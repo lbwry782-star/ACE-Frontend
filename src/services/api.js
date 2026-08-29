@@ -375,7 +375,7 @@ async function generateVideo({ productName, productDescription, signal } = {}) {
 }
 
 /**
- * GET /api/video-status?jobId=... — poll async video job (Builder2).
+ * GET /api/video-status?jobId=... — poll async Builder2 video job (owner context required).
  */
 async function fetchVideoStatus(jobId, { signal } = {}) {
   try {
@@ -389,16 +389,17 @@ async function fetchVideoStatus(jobId, { signal } = {}) {
     })
     const data = await response.json().catch(() => null)
     if (!data || typeof data !== 'object') {
-      return { status: 'error', error: 'Invalid response' }
+      return { status: 'error', httpStatus: response.status, error: 'Invalid response' }
     }
     if (!response.ok) {
       return {
         status: 'error',
+        httpStatus: response.status,
         error: data.error || data.message || `Server error: ${response.status}`,
         ...data
       }
     }
-    return data
+    return { ...data, httpStatus: response.status }
   } catch (error) {
     if (error?.name === 'AbortError') {
       return { status: 'error', error: 'aborted', aborted: true }

@@ -25,6 +25,7 @@ export const BUILDER2_MSG_RESUME = 'המשך מאותה נקודה'
 export const BUILDER2_MSG_GENERIC_FAILURE = 'לא הצלחנו להשלים את יצירת הסרטון.'
 
 const OWNERSHIP_ERROR_CODES = new Set([
+  'ownership_required',
   'ownership_required_historical_job',
   'ownership_mismatch',
   'owner_context_mismatch',
@@ -176,14 +177,31 @@ export function getBuilder2OwnershipErrorCode(payload) {
     .trim()
     .toLowerCase()
   if (OWNERSHIP_ERROR_CODES.has(code)) return code
+
+  const httpStatus = Number(payload?.httpStatus ?? payload?.statusCode ?? payload?.status_code)
+  if (httpStatus === 403) {
+    return code && OWNERSHIP_ERROR_CODES.has(code) ? code : 'ownership_mismatch'
+  }
+
   const msg = String(payload?.message ?? payload?.error ?? '').toLowerCase()
   if (msg.includes('ownership') && msg.includes('historical')) {
     return 'ownership_required_historical_job'
+  }
+  if (msg.includes('ownership') && msg.includes('required')) {
+    return 'ownership_required'
   }
   if (msg.includes('ownership') && msg.includes('mismatch')) {
     return 'ownership_mismatch'
   }
   return null
+}
+
+/**
+ * Ownership denial on Builder2 video-status — must stop polling (not transient).
+ * @param {object|null|undefined} payload
+ */
+export function isBuilder2OwnershipPollFailure(payload) {
+  return Boolean(getBuilder2OwnershipErrorCode(payload))
 }
 
 /** @param {unknown} value */
@@ -269,6 +287,7 @@ export function buildBuilder2VideoResult(payload) {
  * @param {object|null|undefined} payload
  */
 export function isTransientBuilder2PollFailure(payload) {
+  if (isBuilder2OwnershipPollFailure(payload)) return false
   if (normalizeBuilder2Status(payload) !== 'error') return false
   const msg = String(payload?.error ?? payload?.message ?? '').toLowerCase()
   return (

@@ -28,6 +28,7 @@ import {
   isBuilder2StatusFailed,
   isBuilder2CancelAcknowledged,
   isBuilder2ResumeAlreadyInProgress,
+  isBuilder2OwnershipPollFailure,
   getBuilder2OwnershipErrorCode,
   getBuilder2SafeFailureMessage,
   buildBuilder2VideoResult,
@@ -486,6 +487,11 @@ function Builder2Page() {
         }
 
         if (st?.aborted) {
+          break
+        }
+
+        if (isBuilder2OwnershipPollFailure(st)) {
+          await processStatusPayload(jobId, st)
           break
         }
 
