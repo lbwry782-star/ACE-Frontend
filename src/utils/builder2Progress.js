@@ -172,23 +172,32 @@ export function getBuilder2StageProgressFloor(progressStage) {
 }
 
 /**
- * Smoothly raise progress toward a stage floor without jumping backward.
- * @param {number} timePercent
- * @param {number} stageFloor
+ * Raw running target before per-frame smoothing (time + stage floor, capped at 95%).
+ */
+export function computeBuilder2ProgressTarget(
+  elapsedSeconds,
+  estimatedTotalSeconds = BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS,
+  stageFloor = 0,
+  pendingFinalUrl = false
+) {
+  if (pendingFinalUrl) {
+    return Math.min(BUILDER2_PROGRESS_PENDING_URL_CAP, BUILDER2_PROGRESS_MAX_WHILE_RUNNING)
+  }
+  const timeTarget = computeBuilder2TimePercent(elapsedSeconds, estimatedTotalSeconds)
+  const blendedTarget = Math.max(timeTarget, clampPercent(stageFloor, 0, 100))
+  return Math.min(BUILDER2_PROGRESS_MAX_WHILE_RUNNING, blendedTarget)
+}
+
+/**
+ * Smoothly raise displayed progress toward target without moving backward.
+ * @param {number} targetPercent
  * @param {number} previousPercent
  * @param {number} [maxStep=0.12]
  */
-export function mergeBuilder2ProgressWithStageFloor(
-  timePercent,
-  stageFloor,
-  previousPercent,
-  maxStep = 0.12
-) {
+export function advanceBuilder2DisplayedProgress(targetPercent, previousPercent, maxStep = 0.12) {
   const prev = clampPercent(previousPercent)
-  const time = clampPercent(timePercent, 0, BUILDER2_PROGRESS_MAX_WHILE_RUNNING)
-  const floor = clampPercent(stageFloor, 0, 100)
-  const blendedTarget = Math.max(time, floor)
-  const delta = blendedTarget - prev
+  const target = clampPercent(targetPercent, 0, BUILDER2_PROGRESS_MAX_WHILE_RUNNING)
+  const delta = target - prev
   if (delta <= 0) {
     return prev
   }
@@ -483,8 +492,29 @@ export function resolveBuilder2ProgressFrame(ctx) {
     return Math.max(previousPercent, animated)
   }
 
-  const timeTarget = computeBuilder2TimePercent(elapsedSeconds, estimatedTotalSeconds)
-  return mergeBuilder2ProgressWithStageFloor(timeTarget, stageFloor, previousPercent)
+  const target = computeBuilder2ProgressTarget(
+    elapsedSeconds,
+    estimatedTotalSeconds,
+    stageFloor,
+    pendingFinalUrl
+  )
+  return advanceBuilder2DisplayedProgress(target, previousPercent)
+}
+
+/**
+ * @deprecated Prefer computeBuilder2ProgressTarget + advanceBuilder2DisplayedProgress.
+ */
+export function mergeBuilder2ProgressWithStageFloor(
+  timePercent,
+  stageFloor,
+  previousPercent,
+  maxStep = 0.12
+) {
+  const target = Math.max(
+    clampPercent(timePercent, 0, BUILDER2_PROGRESS_MAX_WHILE_RUNNING),
+    clampPercent(stageFloor, 0, 100)
+  )
+  return advanceBuilder2DisplayedProgress(target, previousPercent, maxStep)
 }
 
 /**

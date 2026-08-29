@@ -9,7 +9,7 @@
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
     "test:builder1": "node scripts/test-builder1-campaign.mjs",
-    "test:builder2": "node scripts/test-builder2-progress.mjs && node scripts/test-builder2-recovery.mjs && node scripts/test-builder2-layout.mjs && node scripts/test-builder2-terminal-failure.mjs && node scripts/test-builder2-refresh-cancel.mjs && node scripts/test-builder2-final-result.mjs"
+    "test:builder2": "node scripts/test-builder2-progress.mjs && node scripts/test-builder2-progress-animation.mjs && node scripts/test-builder2-recovery.mjs && node scripts/test-builder2-layout.mjs && node scripts/test-builder2-terminal-failure.mjs && node scripts/test-builder2-refresh-cancel.mjs && node scripts/test-builder2-final-result.mjs"
   },
   "dependencies": {
     "react": "^18.2.0",

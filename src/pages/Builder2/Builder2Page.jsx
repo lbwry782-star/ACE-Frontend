@@ -146,6 +146,7 @@ function Builder2Page() {
   const fillingResolvedNameRef = useRef(false)
   const userLeftProductNameEmptyRef = useRef(false)
   const hadConfirmedRunningRef = useRef(false)
+  const showProgressBarRef = useRef(false)
 
   useEffect(() => {
     clearBuilder2FormDraft()
@@ -204,26 +205,32 @@ function Builder2Page() {
   }, [])
 
   const beginProgress = useCallback((jobId) => {
+    const isFreshProgressSession = !showProgressBarRef.current
+
     pendingVideoResultRef.current = null
     setProgressTaskFailed(false)
     setProgressTaskSucceeded(false)
-    setProgressPendingFinalUrl(false)
-    setProgressStageLabel('')
+    if (isFreshProgressSession) {
+      setProgressPendingFinalUrl(false)
+      setProgressStageLabel('')
+      setProgressKey((prev) => prev + 1)
+    }
     const startedAt =
       progressJobStartMsRef.current ??
       reconcileBuilder2JobTiming(jobId, {}, Date.now()).startMs
     progressJobStartMsRef.current = startedAt
     const timing = reconcileBuilder2JobTiming(jobId, { progressStartedAt: startedAt }, startedAt)
     setProgressTiming(timing)
-    setProgressKey((prev) => prev + 1)
     setProgressActive(true)
     setShowProgressBar(true)
+    showProgressBarRef.current = true
     setState(STATE.GENERATING)
   }, [])
 
   const stopProgressUi = useCallback(() => {
     setProgressActive(false)
     setShowProgressBar(false)
+    showProgressBarRef.current = false
     setProgressTaskSucceeded(false)
     setProgressPendingFinalUrl(false)
     setProgressStageLabel('')
@@ -261,7 +268,9 @@ function Builder2Page() {
       if (!built.videoUrl) {
         setProgressPendingFinalUrl(true)
         setProgressStageLabel(BUILDER2_MSG_PREPARING_VIDEO_FILE)
-        beginProgress(jobId)
+        if (!showProgressBarRef.current) {
+          beginProgress(jobId)
+        }
         return false
       }
 
@@ -719,7 +728,6 @@ function Builder2Page() {
       {showProgressBar ? (
         <section className="builder2-progress-section" aria-live="polite">
           <Builder2ProgressBar
-            key={progressKey}
             progressKey={progressKey}
             visible={progressActive}
             progressTiming={progressTiming}

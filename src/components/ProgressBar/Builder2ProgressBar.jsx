@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   resolveBuilder2ProgressFrame,
+  computeBuilder2ProgressTarget,
+  advanceBuilder2DisplayedProgress,
   normalizeBuilder2ProgressPercent,
   getBuilder2RemainingTimeText,
   formatBuilder2ProgressStatusLine,
   getBuilder2ElapsedSeconds,
   BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
 } from '../../utils/builder2Progress'
+
 import './builder2-progress.css'
+
+/** Max percent-per-second displayed progress moves toward target while running. */
+const BUILDER2_DISPLAY_PROGRESS_SPEED_PER_SEC = 9
 
 function Builder2ProgressBar({
   visible,
@@ -27,6 +33,7 @@ function Builder2ProgressBar({
   const revealCalledRef = useRef(false)
   const progressRef = useRef(0)
   const lastRemainingSecondRef = useRef(-1)
+  const lastFrameMsRef = useRef(null)
 
   const visibleRef = useRef(visible)
   const taskSucceededRef = useRef(taskSucceeded)
@@ -52,10 +59,9 @@ function Builder2ProgressBar({
     completionFromRef.current = null
     revealCalledRef.current = false
     lastRemainingSecondRef.current = -1
-    setRemainingTimeText(
-      getBuilder2RemainingTimeText(0, estimatedTotalSeconds)
-    )
-  }, [progressKey, estimatedTotalSeconds])
+    lastFrameMsRef.current = null
+    setRemainingTimeText(getBuilder2RemainingTimeText(0, estimatedTotalSeconds))
+  }, [progressKey])
 
   useEffect(() => {
     if (rafRef.current) {
@@ -84,10 +90,16 @@ function Builder2ProgressBar({
         return
       }
 
+      const prevFrameMs = lastFrameMsRef.current
+      lastFrameMsRef.current = now
+      const deltaMs =
+        prevFrameMs != null && Number.isFinite(prevFrameMs) ? Math.max(0, now - prevFrameMs) : 16
+      const maxStep = BUILDER2_DISPLAY_PROGRESS_SPEED_PER_SEC * (deltaMs / 1000)
+
       const timing = progressTimingRef.current
       const totalSeconds = timing?.estimatedTotalSeconds ?? BUILDER2_DEFAULT_ESTIMATED_TOTAL_SECONDS
       const stageFloor = timing?.stageFloor ?? 0
-      const elapsedSeconds = getBuilder2ElapsedSeconds(timing)
+      const elapsedSeconds = getBuilder2ElapsedSeconds(timing, now)
 
       if (
         taskSucceededRef.current &&
@@ -110,15 +122,16 @@ function Builder2ProgressBar({
           completionElapsedMs
         })
       } else {
-        nextPercent = resolveBuilder2ProgressFrame({
+        const target = computeBuilder2ProgressTarget(
           elapsedSeconds,
-          estimatedTotalSeconds: totalSeconds,
-          previousPercent: progressRef.current,
+          totalSeconds,
           stageFloor,
-          pendingFinalUrl: pendingFinalUrlRef.current
-        })
+          pendingFinalUrlRef.current
+        )
+        nextPercent = advanceBuilder2DisplayedProgress(target, progressRef.current, maxStep)
       }
 
+      nextPercent = Math.max(progressRef.current, nextPercent)
       progressRef.current = nextPercent
       setDisplayProgress(nextPercent)
 
@@ -147,7 +160,7 @@ function Builder2ProgressBar({
         rafRef.current = null
       }
     }
-  }, [visible, taskFailed, progressKey, progressTiming])
+  }, [visible, taskFailed, progressKey])
 
   useEffect(() => {
     if (!visible || taskFailed || !taskSucceeded) return
