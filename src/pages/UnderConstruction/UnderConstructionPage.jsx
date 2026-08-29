@@ -48,7 +48,7 @@ export default function UnderConstructionPage() {
         <div className="opening-hero-column">
           <div className="opening-image-11-wrap">
             <img
-              src="/assets/11.png?v=2"
+              src="/assets/11.png?v=3"
               className="opening-image-11"
               alt="main"
             />
