@@ -7,6 +7,7 @@ import { fetchLatestPaid, NetworkError, ApiError } from '../../services/api'
 import {
   builder1Generate,
   builder1GenerateNext,
+  builder1RepairPhysical,
   pollBuilder1Job,
   cancelBuilder1Job,
   cancelBuilder1JobKeepalive,
@@ -33,10 +34,13 @@ import {
   BUILDER1_MSG_CANCELLING,
   BUILDER1_MSG_OWNERSHIP,
   BUILDER1_MSG_CAMPAIGN_NOT_READY,
+  BUILDER1_MSG_CAMPAIGN_COMPLETE,
+  BUILDER1_MSG_CAMPAIGN_COMPLETE_EN,
   BUILDER1_MSG_IDEMPOTENCY_CONFLICT,
   isBuilder1CancelAcknowledged,
   isBuilder1CampaignAuthoritativelyReady,
   isBuilder1CampaignDeliveryPending,
+  isBuilder1CampaignDeliverable,
   isBuilder1IdempotencyConflict,
   extractBuilder1MutationJobIds
 } from '../../utils/builder1Status'
@@ -76,6 +80,7 @@ import {
   parseBuilder1RetryContext,
   getBuilder1RetryModeProgressLabel,
   buildBuilder1GenerateNextPayload,
+  buildBuilder1RepairPhysicalPayload,
   BUILDER1_RETRY_MODE
 } from '../../utils/builder1Campaign'
 import {
@@ -388,6 +393,7 @@ function BuilderPage() {
   const displayLanguage = campaignSession?.campaign?.detectedLanguage === 'en' ? 'en' : 'he'
   const isGenerating = state === STATE.GENERATING || state === STATE.GENERATING_NEXT
   const campaignAuthoritativelyReady = isBuilder1CampaignAuthoritativelyReady(campaignSession)
+  const campaignDeliverable = isBuilder1CampaignDeliverable(campaignSession)
   const campaignDeliveryPending = isBuilder1CampaignDeliveryPending(campaignSession)
   const campaignComplete = campaignAuthoritativelyReady
   const canRetryServerAd =
@@ -1021,34 +1027,43 @@ function BuilderPage() {
       language: displayLanguage
     }
 
-    const nextPayload = buildBuilder1GenerateNextPayload({
-      campaignId: activeSession.campaignId,
-      expectedNextIndex: expectedIndex
-    })
+    const isRepairMutation =
+      isServerRetry &&
+      activeRetryContext.retryMode === BUILDER1_RETRY_MODE.REPAIR_FROM_PHYSICAL
 
-    const nextOperation = isServerRetry
-      ? activeRetryContext.retryMode === BUILDER1_RETRY_MODE.REPAIR_FROM_PHYSICAL
-        ? 'repair'
-        : 'retry'
-      : 'next'
+    const mutationPayload = isRepairMutation
+      ? buildBuilder1RepairPhysicalPayload({
+          campaignId: activeSession.campaignId,
+          retryAdIndex: expectedIndex,
+          planRevision: activeRetryContext.planRevision
+        })
+      : buildBuilder1GenerateNextPayload({
+          campaignId: activeSession.campaignId,
+          expectedNextIndex: expectedIndex
+        })
+
+    const nextOperation = isRepairMutation ? 'repair' : isServerRetry ? 'retry' : 'next'
 
     const requestId = createBuilder1RequestId()
     writeBuilder1PendingMutation({
       requestId,
       operation: nextOperation,
-      requestPayload: nextPayload,
+      requestPayload: mutationPayload,
       createdAtMs: Date.now(),
       jobId: null,
       campaignId: activeSession.campaignId
     })
 
+    const invokeMutation = () =>
+      isRepairMutation
+        ? builder1RepairPhysical(mutationPayload, { requestId })
+        : builder1GenerateNext(mutationPayload, { requestId })
+
     try {
       let response
       let createResponse
       try {
-        ;({ response, payload: createResponse } = await callBuilder1MutationWithRetry(() =>
-          builder1GenerateNext(nextPayload, { requestId })
-        ))
+        ;({ response, payload: createResponse } = await callBuilder1MutationWithRetry(invokeMutation))
       } catch (fetchErr) {
         if (fetchErr?.isIdempotencyConflict) {
           handleBuilder1IdempotencyConflict()
@@ -1221,20 +1236,28 @@ function BuilderPage() {
     if (readBuilder1ActiveJob() && !isGenerating) return
     if (readBuilder1PendingMutation()) return
     if (campaignComplete && !builder1RetryContext?.retryable) return
-    if (builder1RetryContext?.retryable && campaignSession?.campaignId) {
-      handleGenerateNextAd()
+
+    if (campaignSession?.campaignId) {
+      if (builder1RetryContext?.retryable) {
+        handleGenerateNextAd()
+        return
+      }
+      if (canGenerateAgain) {
+        handleGenerateNextAd()
+        return
+      }
       return
     }
-    if (campaignSession?.campaignId && canGenerateAgain) {
-      handleGenerateNextAd()
-      return
-    }
+
     handleInitialSubmit(data)
   }
 
   const handleRetryInitial = () => {
     if (builder1RetryContext?.retryable && campaignSession?.campaignId) {
       handleGenerateNextAd()
+      return
+    }
+    if (campaignSession?.campaignId) {
       return
     }
     handleInitialSubmit(formData)
@@ -1293,7 +1316,7 @@ function BuilderPage() {
   }
 
   const handleDownloadCampaignZip = async () => {
-    if (!campaignSession || !campaignAuthoritativelyReady) return
+    if (!campaignSession || !campaignDeliverable) return
     setCampaignZipState({ loading: true, error: null })
 
     try {
@@ -1453,13 +1476,19 @@ function BuilderPage() {
             ))}
           </div>
 
+          {campaignDeliverable ? (
+            <p className="builder-campaign-complete-notice" dir="rtl">
+              {displayLanguage === 'he' ? BUILDER1_MSG_CAMPAIGN_COMPLETE : BUILDER1_MSG_CAMPAIGN_COMPLETE_EN}
+            </p>
+          ) : null}
+
           {campaignDeliveryPending ? (
             <p className="builder-campaign-not-ready" role="alert" dir="rtl">
               {BUILDER1_MSG_CAMPAIGN_NOT_READY}
             </p>
           ) : null}
 
-          {campaignAuthoritativelyReady ? (
+          {campaignDeliverable ? (
             <>
               <button
                 type="button"

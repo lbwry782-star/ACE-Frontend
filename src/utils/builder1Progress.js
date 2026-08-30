@@ -2,8 +2,8 @@
  * Builder1 progress (UI estimate only).
  */
 
-/** Initial campaign planning + ad 1 — midpoint ~10 minutes. */
-export const BUILDER1_INITIAL_ESTIMATED_DURATION_MS = 600_000
+/** Initial campaign planning + ad 1 — 12 minutes. */
+export const BUILDER1_INITIAL_ESTIMATED_DURATION_MS = 720_000
 
 /** One later GENERATE AGAIN (no re-planning) — approximately 1 minute. */
 export const BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS = 60_000
@@ -11,8 +11,14 @@ export const BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS = 60_000
 /** Early-success completion animation (300–700 ms). */
 export const BUILDER1_PROGRESS_COMPLETION_DURATION_MS = 500
 
-/** Max progress while initial job is still running (never 100% until completion). */
-export const BUILDER1_INITIAL_PROGRESS_MAX_WHILE_RUNNING = 96
+/** Max progress while any Builder1 job is still running (never 100% until terminal). */
+export const BUILDER1_PROGRESS_MAX_WHILE_RUNNING = 95
+
+/** @deprecated Use BUILDER1_PROGRESS_MAX_WHILE_RUNNING */
+export const BUILDER1_INITIAL_PROGRESS_MAX_WHILE_RUNNING = BUILDER1_PROGRESS_MAX_WHILE_RUNNING
+
+export const BUILDER1_PROGRESS_OVERDUE_TEXT_HE = 'מסיים את המודעות'
+export const BUILDER1_PROGRESS_OVERDUE_TEXT_EN = 'Finishing the ads'
 
 /** @readonly */
 export const BUILDER1_PROGRESS_OPERATION = Object.freeze({
@@ -21,23 +27,23 @@ export const BUILDER1_PROGRESS_OPERATION = Object.freeze({
 })
 
 export const BUILDER1_INITIAL_PROGRESS_HEADLINE_HE = 'יוצרים עבורך קמפיין משובח'
-export const BUILDER1_INITIAL_PROGRESS_ESTIMATE_HE = 'זמן משוער: 8–12 דקות'
+export const BUILDER1_INITIAL_PROGRESS_ESTIMATE_HE = 'זמן משוער: 12 דקות'
 
 export const BUILDER1_INITIAL_PROGRESS_HEADLINE_EN = 'Creating a polished campaign for you'
-export const BUILDER1_INITIAL_PROGRESS_ESTIMATE_EN = 'Estimated time: 8–12 minutes'
+export const BUILDER1_INITIAL_PROGRESS_ESTIMATE_EN = 'Estimated time: 12 minutes'
 
 export const BUILDER1_INITIAL_PROGRESS_SEPARATOR = ' · '
 
 /** @type {ReadonlyArray<{ t: number, p: number }>} */
 const INITIAL_PROGRESS_CURVE = Object.freeze([
   { t: 0, p: 0 },
-  { t: 120_000, p: 20 },
-  { t: 300_000, p: 50 },
-  { t: 480_000, p: 75 },
-  { t: 600_000, p: 90 }
+  { t: 120_000, p: 15 },
+  { t: 360_000, p: 45 },
+  { t: 540_000, p: 70 },
+  { t: 720_000, p: 90 }
 ])
 
-/** Slow crawl from 90% toward 96% after the midpoint estimate. */
+/** Slow crawl from 90% toward 95% after the 12-minute estimate. */
 const INITIAL_PROGRESS_POST_ESTIMATE_CRAWL_MS = 600_000
 
 /** @type {Map<string, number>} */
@@ -127,10 +133,12 @@ export function computeBuilder1InitialCampaignProgress(elapsedMs, previousPercen
   if (elapsedMs > BUILDER1_INITIAL_ESTIMATED_DURATION_MS) {
     const overdueMs = elapsedMs - BUILDER1_INITIAL_ESTIMATED_DURATION_MS
     const crawlRatio = Math.min(1, overdueMs / INITIAL_PROGRESS_POST_ESTIMATE_CRAWL_MS)
-    target = 90 + (BUILDER1_INITIAL_PROGRESS_MAX_WHILE_RUNNING - 90) * easeOutRatio(crawlRatio)
+    target =
+      90 +
+      (BUILDER1_PROGRESS_MAX_WHILE_RUNNING - 90) * easeOutRatio(crawlRatio)
   }
 
-  const capped = Math.min(BUILDER1_INITIAL_PROGRESS_MAX_WHILE_RUNNING, target)
+  const capped = Math.min(BUILDER1_PROGRESS_MAX_WHILE_RUNNING, target)
   return Math.max(prev, capped)
 }
 
@@ -149,7 +157,7 @@ export function computeBuilder1LinearProgress(elapsedMs, estimatedDurationMs, pr
     return Math.max(prev, 100)
   }
   const linear = (elapsedMs / estimatedDurationMs) * 100
-  const next = Math.min(100, Math.max(0, linear))
+  const next = Math.min(BUILDER1_PROGRESS_MAX_WHILE_RUNNING, Math.max(0, linear))
   return Math.max(prev, next)
 }
 
@@ -196,7 +204,7 @@ export function getBuilder1RemainingTimeText(
     : BUILDER1_INITIAL_ESTIMATED_DURATION_MS
 
   if (safeElapsed >= total) {
-    return '00:00'
+    return isHe ? BUILDER1_PROGRESS_OVERDUE_TEXT_HE : BUILDER1_PROGRESS_OVERDUE_TEXT_EN
   }
 
   const remainingMs = Math.max(0, total - safeElapsed)
@@ -275,7 +283,8 @@ export function resolveBuilder1ProgressFrame(ctx) {
     return computeBuilder1InitialCampaignProgress(elapsedMs, previousPercent)
   }
 
-  return computeBuilder1LinearProgress(elapsedMs, estimatedDurationMs, previousPercent)
+  const linear = computeBuilder1LinearProgress(elapsedMs, estimatedDurationMs, previousPercent)
+  return Math.min(BUILDER1_PROGRESS_MAX_WHILE_RUNNING, linear)
 }
 
 /**

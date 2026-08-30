@@ -24,6 +24,7 @@ import {
   isBuilder1CancelAcknowledged,
   isBuilder1CampaignAuthoritativelyReady,
   isBuilder1CampaignDeliveryPending,
+  isBuilder1CampaignDeliverable,
   getBuilder1OwnershipErrorCode
 } from '../src/utils/builder1Status.js'
 import {
@@ -39,6 +40,7 @@ import {
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
   BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS,
+  BUILDER1_PROGRESS_OVERDUE_TEXT_HE,
   getBuilder1RemainingTimeText
 } from '../src/utils/builder1Progress.js'
 
@@ -196,13 +198,13 @@ assert.doesNotMatch(
   /performance\.now\(\) - jobStartTimeMsRef/
 )
 
-// 19–20. Initial + next-ad countdown at 10s / 30s / 60s
-assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '10:00')
-assert.equal(getBuilder1RemainingTimeText(570_000, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '00:30')
-assert.equal(getBuilder1RemainingTimeText(600_000, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '00:00')
+// 19–20. Initial + next-ad countdown at start / overdue
+assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '12:00')
+assert.equal(getBuilder1RemainingTimeText(690_000, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '00:30')
+assert.equal(getBuilder1RemainingTimeText(720_000, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), BUILDER1_PROGRESS_OVERDUE_TEXT_HE)
 assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '01:00')
 assert.equal(getBuilder1RemainingTimeText(30_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:30')
-assert.equal(getBuilder1RemainingTimeText(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:00')
+assert.equal(getBuilder1RemainingTimeText(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), BUILDER1_PROGRESS_OVERDUE_TEXT_HE)
 
 // 21. Full 50-word marketing text unchanged
 assert.doesNotMatch(adCardSource, /line-clamp|substring|truncate|slice\(0/)
@@ -230,10 +232,12 @@ const fullReadySession = {
   generatedCount: 2,
   targetAdCount: 2,
   campaignReady: true,
+  deliveryReconstructible: true,
   canGenerateNext: false
 }
 assert.equal(isBuilder1CampaignAuthoritativelyReady(fullReadySession), true)
-assert.match(builder1PageSource, /campaignAuthoritativelyReady/)
+assert.equal(isBuilder1CampaignDeliverable(fullReadySession), true)
+assert.match(builder1PageSource, /campaignDeliverable/)
 assert.match(builder1PageSource, /handleDownloadCampaignZip/)
 
 // 24–26. Campaign ZIP scope + ownership; ZIP does not call generation

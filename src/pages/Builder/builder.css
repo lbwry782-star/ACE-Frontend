@@ -170,6 +170,19 @@
   color: #f5e6b8;
 }
 
+.builder-campaign-complete-notice {
+  max-width: 420px;
+  margin: 16px auto 0;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+  background-color: #1a2e1a;
+  border: 1px solid #4caf50;
+  color: #c8f5c8;
+}
+
 .builder-rate-limit-panel {
   max-width: 420px;
   margin: 20px auto 0;

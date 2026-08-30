@@ -2,6 +2,8 @@
  * Builder1 status, ownership, and cancellation helpers.
  */
 
+import { parseAuthoritativeCampaignFieldsFromResult } from './builder1Campaign.js'
+
 export const BUILDER1_MSG_CANCEL_BLOCKED =
   'לא ניתן לאשר שהעבודה הקודמת בוטלה. נסו לרענן שוב בעוד רגע.'
 export const BUILDER1_MSG_CANCELLING = 'מבטל את העבודה הקודמת…'
@@ -9,6 +11,10 @@ export const BUILDER1_MSG_OWNERSHIP =
   'לא ניתן להמשיך את העבודה הזו מהדפדפן הנוכחי. נסו שוב מאותו מכשיר ודפדפן.'
 export const BUILDER1_MSG_CAMPAIGN_NOT_READY =
   'הקמפיין עדיין לא מוכן למסירה סופית. נא להמתין או לנסות שוב מאוחר יותר.'
+export const BUILDER1_MSG_CAMPAIGN_COMPLETE =
+  'הקמפיין הושלם ומוכן למסירה.'
+export const BUILDER1_MSG_CAMPAIGN_COMPLETE_EN =
+  'Campaign complete and ready for delivery.'
 export const BUILDER1_MSG_IDEMPOTENCY_CONFLICT =
   'אירעה התנגשות בבקשה. לא ניתן להמשיך אוטומטית — נסו לרענן את הדף.'
 
@@ -111,16 +117,10 @@ export function isTransientBuilder1PollFailure(payload) {
  * @param {unknown} payload
  */
 export function parseBuilder1CampaignReadinessFields(payload) {
-  if (!payload || typeof payload !== 'object') {
-    return { campaignReady: false, deliveryReconstructible: false }
-  }
-  const campaign =
-    payload.campaign && typeof payload.campaign === 'object' ? payload.campaign : payload
+  const fields = parseAuthoritativeCampaignFieldsFromResult(payload)
   return {
-    campaignReady: Boolean(campaign.campaignReady ?? campaign.campaign_ready),
-    deliveryReconstructible: Boolean(
-      campaign.deliveryReconstructible ?? campaign.delivery_reconstructible
-    )
+    campaignReady: fields.campaignReady,
+    deliveryReconstructible: fields.deliveryReconstructible
   }
 }
 
@@ -150,6 +150,15 @@ export function isBuilder1CampaignDeliveryPending(session) {
     generated >= target &&
     session.campaignReady !== true
   )
+}
+
+/**
+ * Campaign ZIP / final delivery requires authoritative readiness + reconstructible artifacts.
+ * @param {object|null|undefined} session
+ */
+export function isBuilder1CampaignDeliverable(session) {
+  if (!isBuilder1CampaignAuthoritativelyReady(session)) return false
+  return session.deliveryReconstructible === true
 }
 
 /**

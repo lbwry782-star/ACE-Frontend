@@ -144,11 +144,15 @@ export function getBuilder1ComplianceRetryMismatchMessage(language = 'he') {
  */
 export function parseBuilder1RetryContext(body) {
   if (!body || typeof body !== 'object') return null
-  if (body.retryable !== true) return null
+  const source =
+    body.result && typeof body.result === 'object' && body.retryable == null
+      ? body.result
+      : body
+  if (source.retryable !== true) return null
 
-  const campaignId = String(body.campaignId ?? '').trim()
-  const retryMode = String(body.retryMode ?? '').trim().toLowerCase()
-  const retryAdIndex = Number(body.retryAdIndex)
+  const campaignId = String(source.campaignId ?? '').trim()
+  const retryMode = String(source.retryMode ?? '').trim().toLowerCase()
+  const retryAdIndex = Number(source.retryAdIndex)
 
   if (!campaignId || !BUILDER1_RETRY_MODE_VALUES.has(retryMode)) return null
   if (!Number.isInteger(retryAdIndex) || retryAdIndex < 1) return null
@@ -158,16 +162,21 @@ export function parseBuilder1RetryContext(body) {
     campaignId,
     retryMode,
     retryAdIndex,
-    planRevision: body.planRevision ?? null,
-    planningComplete: body.planningComplete ?? null,
-    imageGenerated: body.imageGenerated ?? null,
-    complianceAvailable: body.complianceAvailable ?? null,
-    status: body.status ?? null,
-    stage: body.stage ?? null,
-    error: parseBuilder1ApiErrorCode(body, body?.message) || null,
-    generatedCount: body.generatedCount != null ? Number(body.generatedCount) : null,
-    targetAdCount: body.targetAdCount != null ? Number(body.targetAdCount) : null,
-    nextAdIndex: body.nextAdIndex != null ? Number(body.nextAdIndex) : null
+    planRevision: source.planRevision ?? null,
+    planningComplete: source.planningComplete ?? null,
+    imageGenerated: source.imageGenerated ?? null,
+    complianceAvailable: source.complianceAvailable ?? null,
+    preservedThroughStage: source.preservedThroughStage ?? null,
+    userMessage:
+      typeof source.userMessage === 'string' && source.userMessage.trim()
+        ? source.userMessage.trim()
+        : null,
+    status: source.status ?? body.status ?? null,
+    stage: source.stage ?? body.stage ?? null,
+    error: parseBuilder1ApiErrorCode(source, source?.message) || null,
+    generatedCount: source.generatedCount != null ? Number(source.generatedCount) : null,
+    targetAdCount: source.targetAdCount != null ? Number(source.targetAdCount) : null,
+    nextAdIndex: source.nextAdIndex != null ? Number(source.nextAdIndex) : null
   }
 }
 
@@ -229,6 +238,12 @@ export function getBuilder1RetryModeProgressLabel(retryMode, language = 'he') {
 }
 
 export function getBuilder1RetryErrorMessage(context, language = 'he') {
+  if (
+    context?.retryMode === BUILDER1_RETRY_MODE.REPAIR_FROM_PHYSICAL &&
+    context?.userMessage
+  ) {
+    return context.userMessage
+  }
   if (isBuilder1ImageComplianceError(context?.error)) {
     return getBuilder1ImageComplianceMessage(context.error, language)
   }
@@ -270,6 +285,21 @@ export function buildBuilder1GenerateNextPayload({ campaignId, expectedNextIndex
     campaignId: String(campaignId ?? '').trim(),
     expectedNextIndex: Number(expectedNextIndex)
   }
+}
+
+/**
+ * Canonical repair payload for POST /api/builder1-repair-physical
+ * @param {{ campaignId: string, retryAdIndex: number, planRevision?: unknown }} input
+ */
+export function buildBuilder1RepairPhysicalPayload({ campaignId, retryAdIndex, planRevision }) {
+  const payload = {
+    campaignId: String(campaignId ?? '').trim(),
+    retryAdIndex: Number(retryAdIndex)
+  }
+  if (planRevision != null) {
+    payload.planRevision = planRevision
+  }
+  return payload
 }
 
 /**
@@ -900,7 +930,7 @@ export function validateInitialCampaignResponse(result, requestedAdCount) {
       ? nextAdIndexRaw
       : 2
 
-  const readiness = parseCampaignReadinessFromResult(result)
+  const authoritative = parseAuthoritativeCampaignFieldsFromResult(result)
 
   return {
     ok: true,
@@ -920,9 +950,9 @@ export function validateInitialCampaignResponse(result, requestedAdCount) {
     },
     ad: extracted.ad,
     ads: [extracted.ad],
-    nextAdIndex,
+    nextAdIndex: authoritative.nextAdIndex ?? nextAdIndex,
     targetAdCount,
-    ...readiness
+    ...authoritative
   }
 }
 
@@ -975,17 +1005,143 @@ export function validateNextAdResponse(result, ctx) {
     }
   }
 
-  const nextAdIndexRaw = Number(result.nextAdIndex ?? result.next_ad_index ?? expectedIndex + 1)
-  const nextAdIndex = Number.isInteger(nextAdIndexRaw) ? nextAdIndexRaw : expectedIndex + 1
-
-  const readiness = parseCampaignReadinessFromResult(result)
+  const authoritative = parseAuthoritativeCampaignFieldsFromResult(result)
 
   return {
     ok: true,
     campaignId: responseCampaignId,
     ad: extracted.ad,
+    nextAdIndex: authoritative.nextAdIndex,
+    ...authoritative
+  }
+}
+
+/**
+ * Read authoritative Backend campaign fields from a terminal result object.
+ * Top-level result fields win over nested campaign metadata when present.
+ * @param {unknown} result
+ */
+export function parseAuthoritativeCampaignFieldsFromResult(result) {
+  if (!result || typeof result !== 'object') {
+    return {
+      campaignReady: false,
+      deliveryReconstructible: false,
+      campaignComplete: false,
+      generatedCount: null,
+      targetAdCount: null,
+      nextAdIndex: null,
+      canGenerateNext: null
+    }
+  }
+
+  const nested =
+    result.campaign && typeof result.campaign === 'object' ? result.campaign : null
+
+  const readNullableBool = (camel, snake) => {
+    for (const source of [result, nested]) {
+      if (!source || typeof source !== 'object') continue
+      if (source[camel] === true || source[snake] === true) return true
+      if (source[camel] === false || source[snake] === false) return false
+    }
+    return null
+  }
+
+  const readBool = (camel, snake) => readNullableBool(camel, snake) === true
+
+  const readNullableInt = (camel, snake) => {
+    for (const source of [result, nested]) {
+      if (!source || typeof source !== 'object') continue
+      const raw = source[camel] ?? source[snake]
+      if (raw == null) continue
+      const n = Number(raw)
+      if (Number.isInteger(n)) return n
+    }
+    return null
+  }
+
+  const canGenerateNext = readNullableBool('canGenerateNext', 'can_generate_next')
+  const nextAdIndexRaw = result.nextAdIndex ?? result.next_ad_index ?? nested?.nextAdIndex ?? nested?.next_ad_index
+  let nextAdIndex = null
+  if (nextAdIndexRaw != null) {
+    const n = Number(nextAdIndexRaw)
+    nextAdIndex = Number.isInteger(n) ? n : null
+  } else if (canGenerateNext === false) {
+    nextAdIndex = null
+  }
+
+  return {
+    campaignReady: readBool('campaignReady', 'campaign_ready'),
+    deliveryReconstructible: readBool('deliveryReconstructible', 'delivery_reconstructible'),
+    campaignComplete: readBool('campaignComplete', 'campaign_complete'),
+    generatedCount: readNullableInt('generatedCount', 'generated_count'),
+    targetAdCount: readNullableInt('targetAdCount', 'target_ad_count'),
     nextAdIndex,
-    ...readiness
+    canGenerateNext,
+    campaignReadyExplicit: readNullableBool('campaignReady', 'campaign_ready'),
+    deliveryReconstructibleExplicit: readNullableBool(
+      'deliveryReconstructible',
+      'delivery_reconstructible'
+    ),
+    campaignCompleteExplicit: readNullableBool('campaignComplete', 'campaign_complete')
+  }
+}
+
+/**
+ * Merge authoritative Backend campaign fields into a session object.
+ * Backend TRUE / explicit values win over stale local session values.
+ * @param {object} session
+ * @param {object} authoritative
+ * @param {{ generatedCount?: number, nextAdIndex?: number|null, canGenerateNext?: boolean|null }} [derived]
+ */
+export function mergeAuthoritativeCampaignSessionFields(session, authoritative, derived = {}) {
+  const targetAdCount = normalizeBuilder1AdCount(
+    authoritative.targetAdCount ?? session?.targetAdCount ?? 2
+  )
+  const generatedCount =
+    derived.generatedCount ??
+    authoritative.generatedCount ??
+    session?.generatedCount ??
+    0
+
+  let nextAdIndex = session?.nextAdIndex ?? null
+  if (authoritative.nextAdIndex !== undefined) {
+    nextAdIndex = authoritative.nextAdIndex
+  } else if (derived.nextAdIndex !== undefined) {
+    nextAdIndex = derived.nextAdIndex
+  }
+
+  let canGenerateNext = session?.canGenerateNext ?? false
+  if (authoritative.canGenerateNext != null) {
+    canGenerateNext = authoritative.canGenerateNext === true
+  } else if (derived.canGenerateNext != null) {
+    canGenerateNext = derived.canGenerateNext === true
+  } else {
+    canGenerateNext = generatedCount < targetAdCount
+  }
+
+  return {
+    campaignReady:
+      authoritative.campaignReadyExplicit === true
+        ? true
+        : authoritative.campaignReadyExplicit === false
+          ? false
+          : session?.campaignReady === true,
+    deliveryReconstructible:
+      authoritative.deliveryReconstructibleExplicit === true
+        ? true
+        : authoritative.deliveryReconstructibleExplicit === false
+          ? false
+          : session?.deliveryReconstructible === true,
+    campaignComplete:
+      authoritative.campaignCompleteExplicit === true
+        ? true
+        : authoritative.campaignCompleteExplicit === false
+          ? false
+          : session?.campaignComplete === true,
+    generatedCount,
+    targetAdCount,
+    nextAdIndex,
+    canGenerateNext
   }
 }
 
@@ -1018,25 +1174,30 @@ export function appendAdToSession(session, validatedNext) {
 
   const ads = sortAdsByIndex([...existingAds, validatedNext.ad])
   const generatedCount = ads.length
-  const nextAdIndex =
-    validatedNext.nextAdIndex != null && Number.isInteger(Number(validatedNext.nextAdIndex))
-      ? Number(validatedNext.nextAdIndex)
-      : validatedNext.ad.index + 1
+  const authoritative = {
+    ...validatedNext,
+    generatedCount: validatedNext.generatedCount ?? generatedCount
+  }
+  const merged = mergeAuthoritativeCampaignSessionFields(session, authoritative, {
+    generatedCount,
+    nextAdIndex:
+      validatedNext.nextAdIndex !== undefined
+        ? validatedNext.nextAdIndex
+        : generatedCount < normalizeBuilder1AdCount(session.targetAdCount)
+          ? validatedNext.ad.index + 1
+          : null,
+    canGenerateNext:
+      validatedNext.canGenerateNext != null
+        ? validatedNext.canGenerateNext
+        : generatedCount < normalizeBuilder1AdCount(session.targetAdCount)
+  })
 
   return {
     ok: true,
     session: {
       ...session,
       ads,
-      generatedCount,
-      nextAdIndex,
-      canGenerateNext: generatedCount < targetAdCount,
-      campaignReady:
-        validatedNext.campaignReady === true ? true : (session.campaignReady ?? false),
-      deliveryReconstructible:
-        validatedNext.deliveryReconstructible === true
-          ? true
-          : (session.deliveryReconstructible ?? false)
+      ...merged
     }
   }
 }
@@ -1059,10 +1220,18 @@ export function createCampaignSessionFromInitial(validatedInitial, targetAdCount
       ? Number(validatedInitial.nextAdIndex)
       : 2
 
-  const readiness = {
-    campaignReady: Boolean(validatedInitial.campaignReady),
-    deliveryReconstructible: Boolean(validatedInitial.deliveryReconstructible)
-  }
+  const merged = mergeAuthoritativeCampaignSessionFields(
+    {},
+    validatedInitial,
+    {
+      generatedCount: 1,
+      nextAdIndex,
+      canGenerateNext:
+        validatedInitial.canGenerateNext != null
+          ? validatedInitial.canGenerateNext
+          : count > 1
+    }
+  )
 
   return {
     ok: true,
@@ -1072,10 +1241,7 @@ export function createCampaignSessionFromInitial(validatedInitial, targetAdCount
       composition: validatedInitial.composition,
       targetAdCount: count,
       ads: [validatedInitial.ad],
-      generatedCount: 1,
-      nextAdIndex,
-      canGenerateNext: count > 1,
-      ...readiness
+      ...merged
     }
   }
 }
@@ -1175,16 +1341,10 @@ export function getStageLabel(pollPayload, language = 'he', mode = 'initial', ct
  * @param {unknown} result
  */
 export function parseCampaignReadinessFromResult(result) {
-  if (!result || typeof result !== 'object') {
-    return { campaignReady: false, deliveryReconstructible: false }
-  }
-  const campaign =
-    result.campaign && typeof result.campaign === 'object' ? result.campaign : result
+  const fields = parseAuthoritativeCampaignFieldsFromResult(result)
   return {
-    campaignReady: Boolean(campaign.campaignReady ?? campaign.campaign_ready),
-    deliveryReconstructible: Boolean(
-      campaign.deliveryReconstructible ?? campaign.delivery_reconstructible
-    )
+    campaignReady: fields.campaignReady,
+    deliveryReconstructible: fields.deliveryReconstructible
   }
 }
 

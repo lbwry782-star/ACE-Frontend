@@ -48,13 +48,20 @@ import {
   validateBuilder1RetryContext,
   getBuilder1RetryModeProgressLabel,
   resolveBuilder1RetryErrorResponse,
-  buildBuilder1GenerateNextPayload
+  buildBuilder1GenerateNextPayload,
+  buildBuilder1RepairPhysicalPayload,
+  parseAuthoritativeCampaignFieldsFromResult,
+  mergeAuthoritativeCampaignSessionFields,
+  parseCampaignReadinessFromResult,
+  getBuilder1RetryErrorMessage
 } from '../src/utils/builder1Campaign.js'
 import { getAgentDisplayName } from '../src/utils/agentDisplayName.js'
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
   BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS,
   BUILDER1_PROGRESS_COMPLETION_DURATION_MS,
+  BUILDER1_PROGRESS_MAX_WHILE_RUNNING,
+  BUILDER1_PROGRESS_OVERDUE_TEXT_HE,
   BUILDER1_PROGRESS_OPERATION,
   resolveBuilder1ProgressOperationType,
   getBuilder1EstimatedDurationForOperation,
@@ -126,8 +133,8 @@ mockStorages()
 // 1–4. Constant-speed progress
 assert.equal(computeBuilder1LinearProgress(0, 1000), 0)
 assert.equal(computeBuilder1LinearProgress(500, 1000), 50)
-assert.equal(computeBuilder1LinearProgress(1000, 1000), 100)
-assert.equal(computeBuilder1LinearProgress(2000, 1000), 100)
+assert.equal(computeBuilder1LinearProgress(1000, 1000), BUILDER1_PROGRESS_MAX_WHILE_RUNNING)
+assert.equal(computeBuilder1LinearProgress(2000, 1000), BUILDER1_PROGRESS_MAX_WHILE_RUNNING)
 assert.equal(computeBuilder1LinearProgress(500, 1000, 40), 50)
 assert.equal(computeBuilder1LinearProgress(100, 1000, 50), 50)
 
@@ -145,10 +152,10 @@ const stageJump = resolveBuilder1ProgressFrame({
 assert.equal(stageJump, 50)
 
 // Initial campaign curve — never reaches 100% while running
-assert.ok(computeBuilder1InitialCampaignProgress(600_000, 0) >= 88)
-assert.ok(computeBuilder1InitialCampaignProgress(600_000, 0) <= 92)
-assert.ok(computeBuilder1InitialCampaignProgress(720_000, 0) < 97)
-assert.ok(computeBuilder1InitialCampaignProgress(1_800_000, 0) <= BUILDER1_INITIAL_PROGRESS_MAX_WHILE_RUNNING)
+assert.ok(computeBuilder1InitialCampaignProgress(600_000, 0) >= 78)
+assert.ok(computeBuilder1InitialCampaignProgress(600_000, 0) <= 85)
+assert.ok(computeBuilder1InitialCampaignProgress(720_000, 0) <= BUILDER1_PROGRESS_MAX_WHILE_RUNNING)
+assert.ok(computeBuilder1InitialCampaignProgress(1_800_000, 0) <= BUILDER1_PROGRESS_MAX_WHILE_RUNNING)
 assert.ok(
   resolveBuilder1ProgressFrame({
     elapsedMs: 999_999,
@@ -170,10 +177,10 @@ assert.equal(
   100
 )
 
-// Next-ad linear still reaches 100% at estimate
+// Next-ad linear caps at 95% while running
 assert.equal(
   computeBuilder1LinearProgress(BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS),
-  100
+  BUILDER1_PROGRESS_MAX_WHILE_RUNNING
 )
 
 // 5–6. Early completion animation
@@ -271,12 +278,12 @@ assert.equal(zipReq.ad.imageBase64, 'abc123')
 assert.match(builderPageSource, /zipStateByAd/)
 assert.match(builderPageSource, /handleDownloadAdZip/)
 
-// 23–25. Completion summary removed
+// 23–25. Legacy completion summary removed; deliverable notice added separately
 assert.doesNotMatch(builderPageSource, /builder-campaign-heading/)
 assert.doesNotMatch(builderPageSource, /builder-campaign-meta/)
-assert.doesNotMatch(builderPageSource, /builder-campaign-complete/)
-assert.doesNotMatch(builderPageSource, /הקמפיין הושלם/)
+assert.doesNotMatch(builderPageSource, /builder-campaign-complete[^-]/)
 assert.doesNotMatch(builderPageSource, /קמפיין פרסומי/)
+assert.match(builderPageSource, /builder-campaign-complete-notice/)
 
 // Marketing word count helper
 assert.equal(countMarketingWords('one two three'), 3)
@@ -320,7 +327,7 @@ const payload3 = buildInitialGeneratePayload({
 assert.equal(payload3.adCount, 3)
 
 // Duration constants — next-ad substantially shorter than initial midpoint
-assert.equal(BUILDER1_INITIAL_ESTIMATED_DURATION_MS, 600_000)
+assert.equal(BUILDER1_INITIAL_ESTIMATED_DURATION_MS, 720_000)
 assert.equal(BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS, 60_000)
 assert.ok(BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS < BUILDER1_INITIAL_ESTIMATED_DURATION_MS)
 assert.ok(
@@ -375,14 +382,14 @@ assert.equal(
   computeBuilder1LinearProgress(10_000, 60_000)
 )
 
-// Next-ad at estimate → 100%, stays there while polling
+// Next-ad at estimate → capped while running; completion animation reaches 100%
 assert.equal(
   computeBuilder1LinearProgress(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS),
-  100
+  BUILDER1_PROGRESS_MAX_WHILE_RUNNING
 )
 assert.equal(
   computeBuilder1LinearProgress(90_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS),
-  100
+  BUILDER1_PROGRESS_MAX_WHILE_RUNNING
 )
 
 // Early next-ad success → rapid completion to 100%
@@ -670,7 +677,7 @@ assert.equal(
 assert.match(builderPageSource, /zipStateByAd/)
 assert.doesNotMatch(nextAdBlock, /setZipStateByAd/)
 
-// 62–72. Server-authoritative retry modes route to generate-next
+// 62–72. Server-authoritative retry modes
 const reviewOnlyBody = {
   ok: false,
   retryable: true,
@@ -703,7 +710,7 @@ const repairBody = {
   planningComplete: true
 }
 
-for (const body of [reviewOnlyBody, imageOnlyBody, repairBody]) {
+for (const body of [reviewOnlyBody, imageOnlyBody]) {
   const ctx = parseBuilder1RetryContext(body)
   assert.ok(ctx)
   assert.equal(validateBuilder1RetryContext(ctx, complianceSession).ok, true)
@@ -714,6 +721,16 @@ for (const body of [reviewOnlyBody, imageOnlyBody, repairBody]) {
   assert.equal(payload.campaignId, 'camp-abc')
   assert.equal(payload.expectedNextIndex, 2)
 }
+
+const repairCtx = parseBuilder1RetryContext(repairBody)
+assert.ok(repairCtx)
+const repairPayload = buildBuilder1RepairPhysicalPayload({
+  campaignId: repairCtx.campaignId,
+  retryAdIndex: repairCtx.retryAdIndex,
+  planRevision: repairCtx.planRevision
+})
+assert.equal(repairPayload.campaignId, 'camp-abc')
+assert.equal(repairPayload.retryAdIndex, 2)
 
 assert.equal(
   getBuilder1RetryModeProgressLabel(BUILDER1_RETRY_MODE.REVIEW_ONLY, 'he'),
@@ -734,6 +751,7 @@ const handleFormSubmitBlock = builderPageSource.slice(
 )
 assert.match(handleFormSubmitBlock, /builder1RetryContext\?\.retryable/)
 assert.match(handleFormSubmitBlock, /handleGenerateNextAd/)
+assert.match(handleFormSubmitBlock, /if \(campaignSession\?\.campaignId\)[\s\S]*return[\s\S]*\}\s*\n\s*handleInitialSubmit/)
 const handleRetryInitialBlock = builderPageSource.slice(
   builderPageSource.indexOf('const handleRetryInitial'),
   builderPageSource.indexOf('const handleDownloadAdZip')
@@ -753,9 +771,9 @@ assert.match(nextAdBlock, /generateRequestInFlightRef\.current = true/)
 assert.doesNotMatch(builder2Source, /builder1RetryContext/)
 assert.doesNotMatch(builder2Source, /buildBuilder1GenerateNextPayload/)
 
-// Initial Builder1 progress copy + timing (10-minute midpoint, single-line layout)
+// Initial Builder1 progress copy + timing (12-minute estimate, single-line layout)
 assert.equal(BUILDER1_INITIAL_PROGRESS_HEADLINE_HE, 'יוצרים עבורך קמפיין משובח')
-assert.equal(BUILDER1_INITIAL_PROGRESS_ESTIMATE_HE, 'זמן משוער: 8–12 דקות')
+assert.equal(BUILDER1_INITIAL_PROGRESS_ESTIMATE_HE, 'זמן משוער: 12 דקות')
 assert.equal(BUILDER1_INITIAL_PROGRESS_SEPARATOR, ' · ')
 assert.match(progressBarSource, /formatBuilder1InitialProgressStatusLine/)
 assert.match(progressBarSource, /builder1-progress-status-line/)
@@ -769,13 +787,13 @@ assert.match(progressBarSource, /getBuilder1RemainingTimeText/)
 assert.match(progressBarSource, /formatBuilder1NextAdProgressStatusLine/)
 assert.match(progressBarSource, /BUILDER1_PROGRESS_OPERATION\.INITIAL_CAMPAIGN/)
 
-const singleLine = formatBuilder1InitialProgressStatusLine('10:00')
-assert.match(singleLine, /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · זמן שנותר: 10:00/)
+const singleLine = formatBuilder1InitialProgressStatusLine('12:00')
+assert.match(singleLine, /יוצרים עבורך קמפיין משובח · זמן משוער: 12 דקות · זמן שנותר: 12:00/)
 assert.doesNotMatch(singleLine, /\n/)
-const overdueLine = formatBuilder1InitialProgressStatusLine('00:00')
+const overdueLine = formatBuilder1InitialProgressStatusLine(BUILDER1_PROGRESS_OVERDUE_TEXT_HE)
 assert.match(
   overdueLine,
-  /יוצרים עבורך קמפיין משובח · זמן משוער: 8–12 דקות · זמן שנותר: 00:00/
+  new RegExp(`יוצרים עבורך קמפיין משובח · זמן משוער: 12 דקות · זמן שנותר: ${BUILDER1_PROGRESS_OVERDUE_TEXT_HE}`)
 )
 
 const initialPollBlock = builderPageSource.slice(
@@ -794,20 +812,23 @@ assert.match(builderPageSource, /clearProgressJobTiming/)
 assert.match(builderPageSource, /progressOperationType/)
 
 // Remaining-time text — MM:SS countdown, monotonic, never negative
-assert.equal(getBuilder1InitialRemainingTimeText(0), '10:00')
-assert.equal(getBuilder1InitialRemainingTimeText(20_000), '09:40')
-assert.equal(getBuilder1InitialRemainingTimeText(70_000), '08:50')
-assert.equal(getBuilder1InitialRemainingTimeText(320_000), '04:40')
-assert.equal(getBuilder1InitialRemainingTimeText(541_000), '00:59')
-assert.equal(getBuilder1InitialRemainingTimeText(600_000), '00:00')
+assert.equal(getBuilder1InitialRemainingTimeText(0), '12:00')
+assert.equal(getBuilder1InitialRemainingTimeText(20_000), '11:40')
+assert.equal(getBuilder1InitialRemainingTimeText(70_000), '10:50')
+assert.equal(getBuilder1InitialRemainingTimeText(320_000), '06:40')
+assert.equal(getBuilder1InitialRemainingTimeText(661_000), '00:59')
+assert.equal(getBuilder1InitialRemainingTimeText(720_000), BUILDER1_PROGRESS_OVERDUE_TEXT_HE)
 assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '01:00')
 assert.equal(getBuilder1RemainingTimeText(10_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:50')
 assert.equal(getBuilder1RemainingTimeText(30_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:30')
-assert.equal(getBuilder1RemainingTimeText(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), '00:00')
+assert.equal(getBuilder1RemainingTimeText(60_000, BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS), BUILDER1_PROGRESS_OVERDUE_TEXT_HE)
 assert.equal(formatBuilder1RemainingClock(605_000), '10:05')
 for (const sample of [0, 30_000, 600_000, 900_000]) {
-  assert.doesNotMatch(getBuilder1InitialRemainingTimeText(sample), /-/)
-  assert.match(getBuilder1InitialRemainingTimeText(sample), /^\d{2}:\d{2}$/)
+  const text = getBuilder1InitialRemainingTimeText(sample)
+  assert.doesNotMatch(text, /-/)
+  if (sample < BUILDER1_INITIAL_ESTIMATED_DURATION_MS) {
+    assert.match(text, /^\d{2}:\d{2}$/)
+  }
 }
 
 // Job start timestamps isolated per job ID

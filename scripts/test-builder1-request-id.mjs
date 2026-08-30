@@ -35,6 +35,7 @@ import {
 import { ensureBuilder1OwnerContext } from '../src/utils/builder1OwnerContext.js'
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
+  BUILDER1_PROGRESS_OVERDUE_TEXT_HE,
   getBuilder1RemainingTimeText
 } from '../src/utils/builder1Progress.js'
 
@@ -141,8 +142,9 @@ const nextAdBlock = builder1PageSource.slice(
 )
 assert.match(nextAdBlock, /createBuilder1RequestId\(\)/)
 assert.match(nextAdBlock, /writeBuilder1PendingMutation/)
-assert.match(nextAdBlock, /builder1GenerateNext\(nextPayload, \{ requestId \}\)/)
-assert.match(nextAdBlock, /callBuilder1MutationWithRetry/)
+assert.match(nextAdBlock, /builder1GenerateNext\(mutationPayload, \{ requestId \}\)/)
+assert.match(nextAdBlock, /builder1RepairPhysical\(mutationPayload, \{ requestId \}\)/)
+assert.match(nextAdBlock, /callBuilder1MutationWithRetry\(invokeMutation\)/)
 
 // 19–20. 409 conflict + idempotentReplay
 assert.ok(isBuilder1IdempotencyConflict({ error: 'builder1_idempotency_conflict' }, 409))
@@ -174,7 +176,7 @@ assert.match(builder1ApiSource, /X-ACE-Batch-State/)
 
 // 24–25. progress/countdown unchanged
 assert.match(progressBarSource, /Date\.now\(\) - jobStartTimeMsRef\.current/)
-assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '10:00')
+assert.equal(getBuilder1RemainingTimeText(0, BUILDER1_INITIAL_ESTIMATED_DURATION_MS), '12:00')
 
 // 26. campaignReady helper unchanged
 assert.equal(isBuilder1CampaignAuthoritativelyReady({ generatedCount: 2, targetAdCount: 2, campaignReady: false }), false)

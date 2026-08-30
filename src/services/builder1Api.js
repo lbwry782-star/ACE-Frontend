@@ -272,9 +272,10 @@ export async function replayBuilder1PendingMutation(pending, { signal } = {}) {
   switch (pending.operation) {
     case 'initial':
       return builder1Generate(body, { signal, requestId })
+    case 'repair':
+      return builder1RepairPhysical(body, { signal, requestId })
     case 'next':
     case 'retry':
-    case 'repair':
       return builder1GenerateNext(body, { signal, requestId })
     default:
       return builder1GenerateNext(body, { signal, requestId })
