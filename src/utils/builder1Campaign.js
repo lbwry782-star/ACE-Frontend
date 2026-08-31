@@ -805,7 +805,19 @@ export function normalizeAdFromResponse(ad) {
     return { ok: false, error: 'response_contract_invalid', message: 'Invalid ad index' }
   }
 
-  const img = ad.imageBase64 ?? ad.image_base64 ?? ad.imageSrc ?? ad.image_src
+  const img =
+    ad.imageBase64 ??
+    ad.image_base64 ??
+    ad.imageSrc ??
+    ad.image_src ??
+    (typeof ad.imageArtifactUrl === 'string' &&
+    ad.imageArtifactUrl.trim().startsWith('data:image/')
+      ? ad.imageArtifactUrl
+      : null) ??
+    (typeof ad.image_artifact_url === 'string' &&
+    ad.image_artifact_url.trim().startsWith('data:image/')
+      ? ad.image_artifact_url
+      : null)
   if (typeof img !== 'string' || !img.trim()) {
     return { ok: false, error: 'response_contract_invalid', message: `Missing imageBase64 for ad ${idx}` }
   }

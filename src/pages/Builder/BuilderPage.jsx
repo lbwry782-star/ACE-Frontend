@@ -30,6 +30,16 @@ import {
   clearBuilder1ActiveJob
 } from '../../utils/builder1ActiveJob'
 import {
+  readBuilder1RecoverableTerminalJob,
+  clearBuilder1RecoverableTerminalJob,
+  persistBuilder1RecoverableTerminalJobIfEligible
+} from '../../utils/builder1RecoverableTerminalJob'
+import {
+  readBuilder1RecoverJobIdFromHash,
+  stripBuilder1RecoverJobIdFromHash,
+  reattachBuilder1Job
+} from '../../utils/builder1JobReattach'
+import {
   BUILDER1_MSG_CANCEL_BLOCKED,
   BUILDER1_MSG_CANCELLING,
   BUILDER1_MSG_OWNERSHIP,
@@ -237,6 +247,11 @@ function BuilderPage() {
   const progressLanguageRef = useRef('he')
   const progressJobStartMsRef = useRef(null)
   const progressActiveJobIdRef = useRef(null)
+  const reattachInFlightRef = useRef(false)
+  const reattachPollTokenRef = useRef(0)
+  const recoverBootstrapRef = useRef(false)
+
+  const [reattachBusy, setReattachBusy] = useState(false)
 
   const clearProgressJobTiming = useCallback((jobId = progressActiveJobIdRef.current) => {
     if (jobId) {
@@ -406,6 +421,7 @@ function BuilderPage() {
     initPhase !== 'done' ||
     campaignComplete ||
     isGenerating ||
+    reattachBusy ||
     generateRequestInFlightRef.current ||
     Boolean(readBuilder1ActiveJob()) ||
     Boolean(readBuilder1PendingMutation()) ||
@@ -540,6 +556,105 @@ function BuilderPage() {
     clearBuilder1PendingMutation()
   }, [])
 
+  const applyReattachSuccess = useCallback(
+    (session) => {
+      clearBuilder1RecoverableTerminalJob()
+      clearBuilder1RecoveryState()
+      clearProgressJobTiming()
+      setProgressTaskFailed(false)
+      setProgressTaskSucceeded(false)
+      setIsCompletingProgress(false)
+      setProgressActive(false)
+      setShowProgressBar(false)
+      setStageLabel('')
+      setIsPollDisconnected(false)
+      setCampaignSession(session)
+      setBuilder1RetryContext(null)
+      setComplianceRetryMessage(null)
+      setError(null)
+      setOwnershipError(null)
+      setFieldsLocked(true)
+      setState(STATE.SUCCESS)
+    },
+    [clearProgressJobTiming, clearBuilder1RecoveryState]
+  )
+
+  const runBuilder1Reattach = useCallback(
+    async (jobId, { showProgress = false } = {}) => {
+      if (reattachInFlightRef.current) return
+      if (cancellationGate !== 'ready' || initPhase !== 'done') return
+
+      reattachInFlightRef.current = true
+      setReattachBusy(true)
+      const pollToken = ++reattachPollTokenRef.current
+      setError(null)
+      setComplianceRetryMessage(null)
+
+      const adCount = lockedTargetAdCountRef.current ?? targetAdCount
+      if (showProgress) {
+        setState(STATE.GENERATING)
+        beginProgress(BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN)
+        progressLanguageRef.current = displayLanguage
+      }
+
+      try {
+        const outcome = await reattachBuilder1Job(jobId, {
+          targetAdCount: adCount,
+          isStale: () => reattachPollTokenRef.current !== pollToken || !mountedRef.current,
+          onStage: (stage) => {
+            if (reattachPollTokenRef.current !== pollToken || !mountedRef.current) return
+            setStageLabel(
+              getStageLabel(
+                { stage, status: 'running' },
+                displayLanguage,
+                'initial',
+                { adIndex: 1, targetAdCount: adCount, language: displayLanguage }
+              )
+            )
+          },
+          onTransientError: () => {
+            if (reattachPollTokenRef.current !== pollToken || !mountedRef.current) return
+            setIsPollDisconnected(true)
+          }
+        })
+
+        if (reattachPollTokenRef.current !== pollToken || !mountedRef.current) return
+
+        if (outcome.ok && outcome.session) {
+          applyReattachSuccess(outcome.session)
+          return
+        }
+
+        if (outcome.kind === 'ownership') {
+          handleBuilder1OwnershipFailure()
+          return
+        }
+
+        stopProgressWithFailure()
+        const errCode = outcome.errorCode ?? outcome.error?.code
+        const msg =
+          typeof outcome.message === 'string'
+            ? outcome.message
+            : mapUserFacingError(outcome.error, errCode)
+        setError(msg)
+        setState(STATE.ERROR)
+      } finally {
+        reattachInFlightRef.current = false
+        setReattachBusy(false)
+      }
+    },
+    [
+      cancellationGate,
+      initPhase,
+      targetAdCount,
+      displayLanguage,
+      beginProgress,
+      stopProgressWithFailure,
+      applyReattachSuccess,
+      handleBuilder1OwnershipFailure
+    ]
+  )
+
   const shouldClearBuilder1ActiveJobOnError = useCallback((err) => {
     const code = String(err?.code ?? '').toLowerCase()
     if (code === 'generation_timeout') return false
@@ -672,6 +787,26 @@ function BuilderPage() {
     }
   }, [resetFreshBuilder1Ui, clearBuilder1RecoveryState])
 
+  useEffect(() => {
+    if (cancellationGate !== 'ready' || initPhase !== 'done') return
+    if (recoverBootstrapRef.current) return
+
+    const jobIdFromUrl = readBuilder1RecoverJobIdFromHash()
+    if (!jobIdFromUrl) return
+
+    recoverBootstrapRef.current = true
+    const strippedHash = stripBuilder1RecoverJobIdFromHash()
+    if (strippedHash != null && typeof window !== 'undefined') {
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}${strippedHash}`
+      )
+    }
+
+    void runBuilder1Reattach(jobIdFromUrl, { showProgress: true })
+  }, [cancellationGate, initPhase, runBuilder1Reattach])
+
   const handleInitialSubmit = async (data) => {
     if (generateRequestInFlightRef.current) return
     if (cancellationGate !== 'ready' || initPhase !== 'done') return
@@ -770,6 +905,9 @@ function BuilderPage() {
       campaignId: null
     })
 
+    let lastKnownJobId = null
+    let lastKnownCampaignId = null
+
     try {
       let response
       let createResponse
@@ -836,6 +974,8 @@ function BuilderPage() {
       }
 
       const trimmedJobId = jobId.trim()
+      lastKnownJobId = trimmedJobId
+      lastKnownCampaignId = mutationIds.campaignId ?? null
       updateBuilder1PendingMutation({
         jobId: trimmedJobId,
         campaignId: mutationIds.campaignId
@@ -881,7 +1021,9 @@ function BuilderPage() {
 
       const validated = validateInitialCampaignResponse(rawResult, adCount)
       if (!validated.ok) {
-        throw new Error(validated.message || validated.error || 'response_contract_invalid')
+        const contractErr = new Error(validated.message || validated.error || 'response_contract_invalid')
+        contractErr.code = validated.error || 'response_contract_invalid'
+        throw contractErr
       }
 
       const sessionResult = createCampaignSessionFromInitial(validated, adCount)
@@ -961,6 +1103,11 @@ function BuilderPage() {
       }
 
       stopProgressWithFailure()
+      persistBuilder1RecoverableTerminalJobIfEligible({
+        jobId: lastKnownJobId,
+        campaignId: lastKnownCampaignId,
+        err
+      })
       if (shouldClearBuilder1ActiveJobOnError(err)) {
         clearBuilder1RecoveryState()
       }
@@ -1249,6 +1396,11 @@ function BuilderPage() {
       return
     }
     if (campaignSession?.campaignId) {
+      return
+    }
+    const recoverable = readBuilder1RecoverableTerminalJob()
+    if (recoverable?.jobId) {
+      void runBuilder1Reattach(recoverable.jobId, { showProgress: true })
       return
     }
     handleInitialSubmit(formData)
