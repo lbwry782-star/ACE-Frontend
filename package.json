@@ -8,19 +8,19 @@
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
-    "test:builder1": "node scripts/test-builder1-campaign.mjs && node scripts/test-builder1-production.mjs && node scripts/test-builder1-request-id.mjs && node scripts/test-builder1-delivery-progress.mjs",
+    "test:builder1": "node scripts/test-builder1-campaign.mjs && node scripts/test-builder1-production.mjs && node scripts/test-builder1-request-id.mjs && node scripts/test-builder1-delivery-progress.mjs && node scripts/test-builder1-mount.mjs",
     "test:builder2": "node scripts/test-builder2-progress.mjs && node scripts/test-builder2-progress-animation.mjs && node scripts/test-builder2-recovery.mjs && node scripts/test-builder2-layout.mjs && node scripts/test-builder2-terminal-failure.mjs && node scripts/test-builder2-refresh-cancel.mjs && node scripts/test-builder2-final-result.mjs && node scripts/test-builder2-ownership-poll.mjs"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "jszip": "^3.10.1"
+    "react-router-dom": "^6.20.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
     "gh-pages": "^6.1.1",
+    "happy-dom": "^15.11.7",
     "vite": "^5.0.8"
   }
 }
-

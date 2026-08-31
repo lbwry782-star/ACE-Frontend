@@ -510,7 +510,6 @@ function BuilderPage() {
     setComplianceRetryMessage(null)
     setRateLimitState(null)
     setZipStateByAd({})
-    setCampaignZipState({ loading: false, error: null })
     setIsPollDisconnected(false)
     setProgressTaskFailed(false)
     setProgressTaskSucceeded(false)
