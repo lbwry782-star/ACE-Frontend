@@ -216,9 +216,15 @@ const deliverableSession = {
 assert.equal(isBuilder1CampaignDeliverable(deliverableSession), true)
 assert.equal(isBuilder1CampaignDeliveryPending(deliverableSession), false)
 assert.equal(isBuilder1CampaignAuthoritativelyReady(deliverableSession), true)
-assert.match(builder1PageSource, /BUILDER1_MSG_CAMPAIGN_COMPLETE/)
-assert.match(builder1PageSource, /campaignDeliverable/)
 assert.ok(buildCampaignServerZipRequest(deliverableSession).campaignId)
+assert.doesNotMatch(builder1PageSource, /BUILDER1_MSG_CAMPAIGN_COMPLETE/)
+assert.doesNotMatch(builder1PageSource, /BUILDER1_MSG_CAMPAIGN_NOT_READY/)
+assert.doesNotMatch(builder1PageSource, /builder-campaign-complete-notice/)
+assert.doesNotMatch(builder1PageSource, /builder-campaign-not-ready/)
+assert.doesNotMatch(builder1PageSource, /handleDownloadCampaignZip/)
+assert.doesNotMatch(builder1PageSource, /הורד ZIP קמפיין/)
+assert.match(builder1PageSource, /ErrorPanel/)
+assert.match(builder1PageSource, /complianceRetryMessage/)
 
 // --- ACCIDENTAL NEW CAMPAIGN (18–20) ---
 const handleFormSubmitBlock = builder1PageSource.slice(
@@ -307,7 +313,7 @@ assert.doesNotMatch(
 // --- REGRESSION (30–36) ---
 assert.doesNotMatch(adCardSource, /line-clamp|substring|truncate|slice\(0/)
 assert.match(builder1PageSource, /handleDownloadAdZip/)
-assert.match(builder1PageSource, /handleDownloadCampaignZip/)
+assert.doesNotMatch(builder1PageSource, /handleDownloadCampaignZip/)
 assert.match(builder1PageSource, /pagehide/)
 assert.match(builder1PageSource, /frontend_refresh/)
 assert.match(builder1ApiSource, /X-ACE-Batch-State/)

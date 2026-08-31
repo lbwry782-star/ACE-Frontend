@@ -237,22 +237,18 @@ const fullReadySession = {
 }
 assert.equal(isBuilder1CampaignAuthoritativelyReady(fullReadySession), true)
 assert.equal(isBuilder1CampaignDeliverable(fullReadySession), true)
-assert.match(builder1PageSource, /campaignDeliverable/)
-assert.match(builder1PageSource, /handleDownloadCampaignZip/)
 
-// 24–26. Campaign ZIP scope + ownership; ZIP does not call generation
+// Per-ad ZIP only in UI; campaign-server ZIP helper remains available off-page
 const zipReq = buildCampaignServerZipRequest(fullReadySession)
 assert.equal(zipReq.scope, 'campaign_server')
 assert.equal(zipReq.campaignId, 'camp-prod-1')
-assert.match(builder1PageSource, /buildCampaignServerZipRequest/)
+assert.match(builder1PageSource, /handleDownloadAdZip/)
 assert.match(builder1PageSource, /builder1DownloadZip/)
-assert.doesNotMatch(
-  builder1PageSource.slice(
-    builder1PageSource.indexOf('handleDownloadCampaignZip'),
-    builder1PageSource.indexOf('useEffect(() => {', builder1PageSource.indexOf('handleDownloadCampaignZip'))
-  ),
-  /builder1Generate|builder1GenerateNext/
-)
+assert.doesNotMatch(builder1PageSource, /handleDownloadCampaignZip/)
+assert.doesNotMatch(builder1PageSource, /buildCampaignServerZipRequest/)
+assert.doesNotMatch(builder1PageSource, /BUILDER1_MSG_CAMPAIGN_COMPLETE/)
+assert.doesNotMatch(builder1PageSource, /BUILDER1_MSG_CAMPAIGN_NOT_READY/)
+assert.doesNotMatch(builder1PageSource, /הורד ZIP קמפיין/)
 const singleZip = buildSingleAdZipRequest(readySession.session, readySession.session.ads[0])
 assert.equal(singleZip.scope, 'single_ad')
 

@@ -33,14 +33,10 @@ import {
   BUILDER1_MSG_CANCEL_BLOCKED,
   BUILDER1_MSG_CANCELLING,
   BUILDER1_MSG_OWNERSHIP,
-  BUILDER1_MSG_CAMPAIGN_NOT_READY,
-  BUILDER1_MSG_CAMPAIGN_COMPLETE,
-  BUILDER1_MSG_CAMPAIGN_COMPLETE_EN,
   BUILDER1_MSG_IDEMPOTENCY_CONFLICT,
   isBuilder1CancelAcknowledged,
   isBuilder1CampaignAuthoritativelyReady,
   isBuilder1CampaignDeliveryPending,
-  isBuilder1CampaignDeliverable,
   isBuilder1IdempotencyConflict,
   extractBuilder1MutationJobIds
 } from '../../utils/builder1Status'
@@ -55,9 +51,7 @@ import {
   appendAdToSession,
   buildInitialGeneratePayload,
   buildSingleAdZipRequest,
-  buildCampaignServerZipRequest,
   sanitizeSingleAdZipFilename,
-  sanitizeCampaignZipFilename,
   getStageLabel,
   createDevMockInitialCampaign,
   createDevMockNextAd,
@@ -228,7 +222,6 @@ function BuilderPage() {
   const [initPhase, setInitPhase] = useState('checking')
   const [ownershipError, setOwnershipError] = useState(null)
   const [isPollDisconnected, setIsPollDisconnected] = useState(false)
-  const [campaignZipState, setCampaignZipState] = useState({ loading: false, error: null })
 
   const sidRef = useRef(null)
   const bootstrapCompleteRef = useRef(false)
@@ -393,7 +386,6 @@ function BuilderPage() {
   const displayLanguage = campaignSession?.campaign?.detectedLanguage === 'en' ? 'en' : 'he'
   const isGenerating = state === STATE.GENERATING || state === STATE.GENERATING_NEXT
   const campaignAuthoritativelyReady = isBuilder1CampaignAuthoritativelyReady(campaignSession)
-  const campaignDeliverable = isBuilder1CampaignDeliverable(campaignSession)
   const campaignDeliveryPending = isBuilder1CampaignDeliveryPending(campaignSession)
   const campaignComplete = campaignAuthoritativelyReady
   const canRetryServerAd =
@@ -1315,48 +1307,6 @@ function BuilderPage() {
     }
   }
 
-  const handleDownloadCampaignZip = async () => {
-    if (!campaignSession || !campaignDeliverable) return
-    setCampaignZipState({ loading: true, error: null })
-
-    try {
-      const payload = buildCampaignServerZipRequest(campaignSession)
-      const response = await builder1DownloadZip(payload)
-
-      if (!response.ok) {
-        const errBody = await response.json().catch(async () => {
-          const errText = await response.text().catch(() => '')
-          return { message: errText || `Server error: ${response.status}` }
-        })
-        const msg = errBody?.message || errBody?.error || `Server error: ${response.status}`
-        throw new Error(typeof msg === 'string' ? msg : 'Download failed')
-      }
-
-      const zipBlob = await response.blob()
-      const url = URL.createObjectURL(zipBlob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = sanitizeCampaignZipFilename(campaignSession.campaignId)
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      setCampaignZipState({ loading: false, error: null })
-    } catch (downloadErr) {
-      if (downloadErr?.isOwnershipError) {
-        setOwnershipError(BUILDER1_MSG_OWNERSHIP)
-        setCancellationGate('blocked')
-      }
-      setCampaignZipState({
-        loading: false,
-        error: downloadErr?.isOwnershipError
-          ? BUILDER1_MSG_OWNERSHIP
-          : mapUserFacingError(downloadErr)
-      })
-    }
-  }
-
   useEffect(() => {
     if (fillingResolvedNameRef.current) {
       fillingResolvedNameRef.current = false
@@ -1475,42 +1425,6 @@ function BuilderPage() {
               />
             ))}
           </div>
-
-          {campaignDeliverable ? (
-            <p className="builder-campaign-complete-notice" dir="rtl">
-              {displayLanguage === 'he' ? BUILDER1_MSG_CAMPAIGN_COMPLETE : BUILDER1_MSG_CAMPAIGN_COMPLETE_EN}
-            </p>
-          ) : null}
-
-          {campaignDeliveryPending ? (
-            <p className="builder-campaign-not-ready" role="alert" dir="rtl">
-              {BUILDER1_MSG_CAMPAIGN_NOT_READY}
-            </p>
-          ) : null}
-
-          {campaignDeliverable ? (
-            <>
-              <button
-                type="button"
-                className="builder-campaign-download"
-                onClick={handleDownloadCampaignZip}
-                disabled={campaignZipState.loading}
-              >
-                {campaignZipState.loading
-                  ? displayLanguage === 'he'
-                    ? 'מוריד ZIP…'
-                    : 'Downloading ZIP…'
-                  : displayLanguage === 'he'
-                    ? 'הורד ZIP קמפיין'
-                    : 'Download campaign ZIP'}
-              </button>
-              {campaignZipState.error ? (
-                <p className="builder-campaign-download-error" role="alert">
-                  {campaignZipState.error}
-                </p>
-              ) : null}
-            </>
-          ) : null}
         </section>
       )}
 

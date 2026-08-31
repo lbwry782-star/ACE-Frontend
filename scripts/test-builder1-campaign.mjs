@@ -249,7 +249,11 @@ assert.match(builderPageSource, /builder1Generate/)
 assert.match(builderPageSource, /builder1GenerateNext/)
 assert.match(builderPageSource, /builder1DownloadZip/)
 assert.doesNotMatch(builderPageSource, /builder1-download-zip/)
-assert.match(builderPageSource, /buildCampaignServerZipRequest/)
+assert.doesNotMatch(builderPageSource, /buildCampaignServerZipRequest/)
+assert.doesNotMatch(builderPageSource, /handleDownloadCampaignZip/)
+assert.doesNotMatch(builderPageSource, /builder-campaign-complete-notice/)
+assert.doesNotMatch(builderPageSource, /builder-campaign-not-ready/)
+assert.doesNotMatch(builderPageSource, /הורד ZIP קמפיין/)
 
 // 13–18. AdCard layout
 const adCardSource = readFileSync(join(root, 'src/components/AdCard/AdCard.jsx'), 'utf8')
@@ -278,12 +282,16 @@ assert.equal(zipReq.ad.imageBase64, 'abc123')
 assert.match(builderPageSource, /zipStateByAd/)
 assert.match(builderPageSource, /handleDownloadAdZip/)
 
-// 23–25. Legacy completion summary removed; deliverable notice added separately
+// 23–25. No redundant campaign-level completion/status banners or campaign ZIP control
 assert.doesNotMatch(builderPageSource, /builder-campaign-heading/)
 assert.doesNotMatch(builderPageSource, /builder-campaign-meta/)
-assert.doesNotMatch(builderPageSource, /builder-campaign-complete[^-]/)
+assert.doesNotMatch(builderPageSource, /builder-campaign-complete/)
 assert.doesNotMatch(builderPageSource, /קמפיין פרסומי/)
-assert.match(builderPageSource, /builder-campaign-complete-notice/)
+assert.doesNotMatch(builderPageSource, /BUILDER1_MSG_CAMPAIGN_COMPLETE/)
+assert.doesNotMatch(builderPageSource, /BUILDER1_MSG_CAMPAIGN_NOT_READY/)
+assert.doesNotMatch(builderPageSource, /builder-campaign-download[^-]/)
+assert.match(builderPageSource, /ErrorPanel/)
+assert.match(builderPageSource, /complianceRetryMessage/)
 
 // Marketing word count helper
 assert.equal(countMarketingWords('one two three'), 3)
