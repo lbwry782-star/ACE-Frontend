@@ -82,6 +82,29 @@ export function clearBuilder1RecoverableTerminalJob(storage = globalThis.session
 /**
  * @param {unknown} err
  */
+/**
+ * Initial planning failure eligible for same-job resume (not integrity/contract/cancel).
+ * @param {unknown} err
+ */
+export function isBuilder1PlanningFailedError(err) {
+  if (!err || typeof err !== 'object') return false
+  if (err.isOwnershipError || err.isIdempotencyConflict || err.aborted) return false
+  const code = String(
+    err.code ?? err?.body?.error ?? err?.body?.code ?? err?.body?.result?.error ?? ''
+  )
+    .trim()
+    .toLowerCase()
+  return code === 'planning_failed'
+}
+
+/**
+ * @param {ReturnType<typeof parseBuilder1RecoverableTerminalJobRecord>|null|undefined} record
+ */
+export function isBuilder1PlanningResumeEligibleRecoverable(record) {
+  if (!record?.jobId) return false
+  return String(record.originalTerminalError ?? '').trim().toLowerCase() === 'planning_failed'
+}
+
 export function isBuilder1RecoverableTerminalError(err) {
   if (!err || typeof err !== 'object') return false
   if (err.isOwnershipError) return false

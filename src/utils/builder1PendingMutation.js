@@ -8,7 +8,7 @@ export const BUILDER1_PENDING_MUTATION_SESSION_KEY = 'ace.builder1.pendingMutati
 
 const PENDING_MUTATION_VERSION = 1
 
-/** @typedef {'initial'|'next'|'retry'|'repair'} Builder1PendingMutationOperation */
+/** @typedef {'initial'|'next'|'retry'|'repair'|'resume_planning'} Builder1PendingMutationOperation */
 
 /**
  * @param {unknown} raw
@@ -18,7 +18,7 @@ export function parseBuilder1PendingMutationRecord(raw) {
   const requestId = String(raw.requestId ?? '').trim()
   if (!isValidBuilder1RequestId(requestId)) return null
   const operation = String(raw.operation ?? 'initial').trim().toLowerCase()
-  const validOps = new Set(['initial', 'next', 'retry', 'repair'])
+  const validOps = new Set(['initial', 'next', 'retry', 'repair', 'resume_planning'])
   const requestPayload = raw.requestPayload
   if (!requestPayload || typeof requestPayload !== 'object') return null
   const createdAtMs = Number(raw.createdAtMs)

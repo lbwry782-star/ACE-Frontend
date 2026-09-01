@@ -266,10 +266,12 @@ globalThis.fetch = originalFetch
 
 // 13. RETRY with recoverable terminal job does not call initial generate
 assert.match(builder1PageSource, /readBuilder1RecoverableTerminalJob/)
+assert.match(builder1PageSource, /handleRetryInitial[\s\S]*handleResumePlanning/)
 assert.match(builder1PageSource, /handleRetryInitial[\s\S]*runBuilder1Reattach/)
 const retryBlock =
   builder1PageSource.match(/const handleRetryInitial = \(\) => \{[\s\S]*?\n  \}/)?.[0] ?? ''
 assert.match(retryBlock, /readBuilder1RecoverableTerminalJob/)
+assert.match(retryBlock, /isBuilder1PlanningResumeEligibleRecoverable/)
 assert.doesNotMatch(retryBlock, /handleInitialSubmit\(formData\)[\s\S]*readBuilder1RecoverableTerminalJob/)
 
 // 14. Explicit new campaign flow remains available separately

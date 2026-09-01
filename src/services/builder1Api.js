@@ -240,6 +240,30 @@ export async function builder1RetryImage(body, { signal, requestId } = {}) {
   }
 }
 
+export async function resumeBuilder1Planning(jobId, { signal, requestId } = {}) {
+  if (!isValidBuilder1RequestId(requestId)) {
+    throw new Error('resumeBuilder1Planning requires valid requestId')
+  }
+  const trimmed = String(jobId ?? '').trim()
+  if (!trimmed) {
+    throw new Error('resumeBuilder1Planning requires jobId')
+  }
+  const body = { jobId: trimmed }
+  try {
+    const { response, payload } = await builder1MutationJsonFetch(
+      `${API_BASE_URL}/api/builder1-resume-planning`,
+      body,
+      requestId,
+      { signal, headers: { 'Content-Type': 'application/json' } }
+    )
+    return { response, payload }
+  } catch (error) {
+    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
+    if (error?.name === 'AbortError') throw error
+    throw new NetworkError('Network error: Unable to connect to server')
+  }
+}
+
 export async function builder1RepairPhysical(body, { signal, requestId } = {}) {
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('builder1RepairPhysical requires valid requestId')
@@ -272,6 +296,10 @@ export async function replayBuilder1PendingMutation(pending, { signal } = {}) {
   switch (pending.operation) {
     case 'initial':
       return builder1Generate(body, { signal, requestId })
+    case 'resume_planning': {
+      const jobId = String(body?.jobId ?? pending.jobId ?? '').trim()
+      return resumeBuilder1Planning(jobId, { signal, requestId })
+    }
     case 'repair':
       return builder1RepairPhysical(body, { signal, requestId })
     case 'next':

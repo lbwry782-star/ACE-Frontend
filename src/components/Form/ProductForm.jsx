@@ -43,7 +43,8 @@ function ProductForm({
   onProductNameEdited,
   externalProductNameError = null,
   externalProductDescriptionError = null,
-  onProductDescriptionEdited
+  onProductDescriptionEdited,
+  skipSubmitValidation = false
 }) {
   const [errors, setErrors] = useState({})
 
@@ -71,6 +72,11 @@ function ProductForm({
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (skipSubmitValidation) {
+      setErrors({})
+      onSubmit(formData)
+      return
+    }
     const newErrors = {}
     if (!formData.productDescription.trim()) {
       newErrors.productDescription = 'Product description is required'

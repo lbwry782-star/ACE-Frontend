@@ -14,7 +14,8 @@ import {
   cancelBuilder1JobKeepalive,
   builder1DownloadZip,
   callBuilder1MutationWithRetry,
-  replayBuilder1PendingMutation
+  replayBuilder1PendingMutation,
+  resumeBuilder1Planning
 } from '../../services/builder1Api'
 import { ensureBuilder1OwnerContext } from '../../utils/builder1OwnerContext'
 import { createBuilder1RequestId } from '../../utils/builder1RequestId'
@@ -33,7 +34,8 @@ import {
 import {
   readBuilder1RecoverableTerminalJob,
   clearBuilder1RecoverableTerminalJob,
-  persistBuilder1RecoverableTerminalJobIfEligible
+  persistBuilder1RecoverableTerminalJobIfEligible,
+  isBuilder1PlanningResumeEligibleRecoverable
 } from '../../utils/builder1RecoverableTerminalJob'
 import {
   BUILDER1_RECOVER_JOB_QUERY_PARAM,
@@ -50,7 +52,9 @@ import {
   isBuilder1CampaignAuthoritativelyReady,
   isBuilder1CampaignDeliveryPending,
   isBuilder1IdempotencyConflict,
-  extractBuilder1MutationJobIds
+  extractBuilder1MutationJobIds,
+  isBuilder1PlanningResumeNotEligible,
+  isBuilder1PlanningResumeAccepted
 } from '../../utils/builder1Status'
 import {
   readBuilder1CampaignAdCount,
@@ -89,6 +93,7 @@ import {
   buildBuilder1RepairPhysicalPayload,
   BUILDER1_RETRY_MODE
 } from '../../utils/builder1Campaign'
+import { mergeBuilder1FormWithHydratedSession } from '../../utils/builder1HydratedCampaignUi'
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
   BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS,
@@ -175,6 +180,9 @@ function mapUserFacingError(err, code) {
   if (errCode === 'planning_failed' || lower.includes('planning_failed')) {
     return 'Campaign planning failed. Please try again.'
   }
+  if (errCode === 'planning_resume_not_eligible' || lower.includes('planning_resume_not_eligible')) {
+    return 'Campaign planning could not be resumed. Please try again.'
+  }
   if (errCode === 'image_generation_failed' || lower.includes('image_generation')) {
     return 'Image generation failed. Please try again.'
   }
@@ -241,7 +249,8 @@ function BuilderPage() {
   const bootstrapCompleteRef = useRef(false)
   const fromPaymentCheckDoneRef = useRef(false)
   const generateRequestInFlightRef = useRef(false)
-  const fillingResolvedNameRef = useRef(false)
+  const hydrationFormSyncRef = useRef(false)
+  const lastHydratedCampaignIdRef = useRef(null)
   const initialPollTokenRef = useRef(0)
   const nextPollTokenRef = useRef(0)
   const mountedRef = useRef(true)
@@ -253,10 +262,12 @@ function BuilderPage() {
   const progressActiveJobIdRef = useRef(null)
   const reattachInFlightRef = useRef(false)
   const reattachPollTokenRef = useRef(0)
+  const resumePlanningInFlightRef = useRef(false)
   const recoverBootstrapJobIdRef = useRef(null)
   const recoverBootstrapAttemptsRef = useRef(0)
 
   const [reattachBusy, setReattachBusy] = useState(false)
+  const [resumePlanningBusy, setResumePlanningBusy] = useState(false)
 
   const clearProgressJobTiming = useCallback((jobId = progressActiveJobIdRef.current) => {
     if (jobId) {
@@ -432,6 +443,9 @@ function BuilderPage() {
     (campaignSession.canGenerateNext || canRetryServerAd) &&
     !campaignComplete &&
     !campaignDeliveryPending
+  const skipProductFormValidation = Boolean(
+    campaignSession?.campaignId && (canGenerateAgain || canRetryServerAd)
+  )
   const generateButtonLabel = getBuilder1GenerateButtonLabel({
     campaignComplete,
     hasGeneratedAds: Boolean(campaignSession?.generatedCount),
@@ -444,6 +458,7 @@ function BuilderPage() {
     campaignComplete ||
     isGenerating ||
     reattachBusy ||
+    resumePlanningBusy ||
     generateRequestInFlightRef.current ||
     Boolean(readBuilder1ActiveJob()) ||
     Boolean(readBuilder1PendingMutation()) ||
@@ -487,26 +502,45 @@ function BuilderPage() {
     setStageLabel('')
   }, [clearProgressJobTiming])
 
+  const clearBuilder1RecoveryState = useCallback(() => {
+    clearBuilder1ActiveJob()
+    clearBuilder1PendingMutation()
+  }, [])
+
+  const noteHydratedCampaign = useCallback((session) => {
+    const id = String(session?.campaignId ?? '').trim()
+    if (id) {
+      lastHydratedCampaignIdRef.current = id
+    }
+  }, [])
+
+  const syncFormFromHydratedSession = useCallback((session, { autoName = false } = {}) => {
+    if (!session?.campaignId) return
+    hydrationFormSyncRef.current = true
+    setFormData((prev) => {
+      const next = mergeBuilder1FormWithHydratedSession(prev, session)
+      if (autoName || (!String(prev.productName ?? '').trim() && String(next.productName ?? '').trim())) {
+        queueMicrotask(() => setIsProductNameAuto(true))
+      }
+      return next
+    })
+  }, [])
+
   const applyPendingReveal = useCallback(() => {
     const pending = pendingRevealRef.current
     if (!pending) return
 
     if (pending.type === 'initial') {
-      if (pending.autoName) {
-        fillingResolvedNameRef.current = true
-        setFormData((prev) => ({
-          ...prev,
-          productName: pending.autoName
-        }))
-        setIsProductNameAuto(true)
-      }
+      syncFormFromHydratedSession(pending.session, { autoName: Boolean(pending.autoName) })
       setIsDevMock(Boolean(pending.isDevMock))
       setCampaignSession(pending.session)
+      noteHydratedCampaign(pending.session)
       setBuilder1RetryContext(null)
       setComplianceRetryMessage(null)
     } else if (pending.type === 'next') {
       setIsDevMock(Boolean(pending.isDevMock))
       setCampaignSession(pending.session)
+      noteHydratedCampaign(pending.session)
       setRateLimitState(null)
       setBuilder1RetryContext(null)
       setComplianceRetryMessage(null)
@@ -522,7 +556,7 @@ function BuilderPage() {
     setProgressActive(false)
     setShowProgressBar(false)
     setState(STATE.SUCCESS)
-  }, [clearProgressJobTiming])
+  }, [clearProgressJobTiming, syncFormFromHydratedSession, noteHydratedCampaign])
 
   const queueSuccessfulReveal = useCallback((payload) => {
     pendingRevealRef.current = payload
@@ -573,11 +607,6 @@ function BuilderPage() {
     setState(STATE.ERROR)
   }, [stopProgressWithFailure])
 
-  const clearBuilder1RecoveryState = useCallback(() => {
-    clearBuilder1ActiveJob()
-    clearBuilder1PendingMutation()
-  }, [])
-
   const applyReattachSuccess = useCallback(
     (session) => {
       clearBuilder1RecoverableTerminalJob()
@@ -590,7 +619,9 @@ function BuilderPage() {
       setShowProgressBar(false)
       setStageLabel('')
       setIsPollDisconnected(false)
+      syncFormFromHydratedSession(session)
       setCampaignSession(session)
+      noteHydratedCampaign(session)
       setBuilder1RetryContext(null)
       setComplianceRetryMessage(null)
       setError(null)
@@ -599,7 +630,13 @@ function BuilderPage() {
       setState(STATE.SUCCESS)
       stripRecoveryQueryParam()
     },
-    [clearProgressJobTiming, clearBuilder1RecoveryState, stripRecoveryQueryParam]
+    [
+      clearProgressJobTiming,
+      clearBuilder1RecoveryState,
+      stripRecoveryQueryParam,
+      syncFormFromHydratedSession,
+      noteHydratedCampaign
+    ]
   )
 
   const runBuilder1Reattach = useCallback(
@@ -685,6 +722,218 @@ function BuilderPage() {
     return true
   }, [])
 
+  const executeBuilder1PlanningResumeFlow = useCallback(
+    async ({ jobId, campaignId, requestId, pollToken, pendingAlreadyWritten = false }) => {
+      const trimmedJobId = String(jobId ?? '').trim()
+      if (!trimmedJobId) {
+        throw new Error('Missing jobId for planning resume')
+      }
+      const adCount = lockedTargetAdCountRef.current ?? targetAdCount
+      const requestBody = { jobId: trimmedJobId }
+
+      if (!pendingAlreadyWritten) {
+        writeBuilder1PendingMutation({
+          requestId,
+          operation: 'resume_planning',
+          requestPayload: requestBody,
+          jobId: trimmedJobId,
+          campaignId: campaignId ?? null,
+          createdAtMs: Date.now()
+        })
+      }
+
+      const { response, payload } = await callBuilder1MutationWithRetry(() =>
+        resumeBuilder1Planning(trimmedJobId, { requestId })
+      )
+
+      if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+
+      if (isBuilder1PlanningResumeNotEligible(payload, response.status)) {
+        clearBuilder1PendingMutation()
+        const rejectErr = new Error(
+          typeof payload?.message === 'string' ? payload.message : 'Planning resume not eligible'
+        )
+        rejectErr.code = 'planning_resume_not_eligible'
+        rejectErr.body = payload
+        throw rejectErr
+      }
+
+      if (!isBuilder1PlanningResumeAccepted(response, payload)) {
+        if (isBuilder1IdempotencyConflict(payload, response.status)) {
+          const conflictErr = new Error(BUILDER1_MSG_IDEMPOTENCY_CONFLICT)
+          conflictErr.isIdempotencyConflict = true
+          throw conflictErr
+        }
+        const msg = payload?.message ?? payload?.error
+        const errStr =
+          typeof msg === 'string' ? msg : (msg?.message ?? `Server error: ${response.status}`)
+        throw Object.assign(new Error(errStr || `Server error: ${response.status}`), {
+          body: payload,
+          code: parseBuilder1ApiErrorCode(payload, errStr)
+        })
+      }
+
+      const extracted = extractBuilder1MutationJobIds(payload)
+      const resolvedJobId = String(extracted.jobId ?? trimmedJobId).trim()
+      const resolvedCampaignId = extracted.campaignId ?? campaignId ?? null
+
+      clearBuilder1PendingMutation()
+      clearBuilder1RecoverableTerminalJob()
+
+      const resolvedStartMs = resolveBuilder1JobStartTime(
+        resolvedJobId,
+        progressJobStartMsRef.current ?? Date.now()
+      )
+      progressActiveJobIdRef.current = resolvedJobId
+      progressJobStartMsRef.current = resolvedStartMs
+      setProgressJobStartMs(resolvedStartMs)
+
+      writeBuilder1ActiveJob({
+        jobId: resolvedJobId,
+        campaignId: resolvedCampaignId,
+        operation: 'initial',
+        requestId,
+        startedAtMs: resolvedStartMs
+      })
+
+      const rawResult = await pollBuilder1Job({
+        jobId: resolvedJobId,
+        isStale: () => initialPollTokenRef.current !== pollToken || !mountedRef.current,
+        onStage: (stage) => {
+          if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+          setStageLabel(
+            getStageLabel(
+              { stage, status: 'running' },
+              displayLanguage,
+              'initial',
+              { adIndex: 1, targetAdCount: adCount, language: displayLanguage }
+            )
+          )
+        },
+        onTransientError: () => {
+          if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+          setIsPollDisconnected(true)
+        }
+      })
+
+      if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+      setIsPollDisconnected(false)
+
+      const validated = validateInitialCampaignResponse(rawResult, adCount)
+      if (!validated.ok) {
+        const contractErr = new Error(validated.message || validated.error || 'response_contract_invalid')
+        contractErr.code = validated.error || 'response_contract_invalid'
+        throw contractErr
+      }
+
+      const sessionResult = createCampaignSessionFromInitial(validated, adCount)
+      if (!sessionResult.ok) {
+        throw new Error(sessionResult.message || sessionResult.error || 'response_contract_invalid')
+      }
+
+      queueSuccessfulReveal({
+        type: 'initial',
+        session: sessionResult.session,
+        isDevMock: false,
+        autoName: null
+      })
+    },
+    [targetAdCount, displayLanguage, queueSuccessfulReveal]
+  )
+
+  const handlePlanningResumeFailure = useCallback(
+    (err, { jobId, campaignId, pollToken }) => {
+      if (initialPollTokenRef.current !== pollToken || !mountedRef.current) return
+
+      if (err?.isIdempotencyConflict) {
+        handleBuilder1IdempotencyConflict()
+        return
+      }
+      if (err?.isOwnershipError) {
+        handleBuilder1OwnershipFailure()
+        return
+      }
+
+      stopProgressWithFailure()
+
+      if (err?.code === 'planning_resume_not_eligible') {
+        clearBuilder1PendingMutation()
+        setError(mapUserFacingError(err, err.code))
+        setState(STATE.ERROR)
+        return
+      }
+
+      persistBuilder1RecoverableTerminalJobIfEligible({
+        jobId,
+        campaignId,
+        err
+      })
+      if (shouldClearBuilder1ActiveJobOnError(err)) {
+        clearBuilder1RecoveryState()
+      }
+      setError(mapUserFacingError(err, err?.code))
+      setState(STATE.ERROR)
+    },
+    [
+      stopProgressWithFailure,
+      handleBuilder1IdempotencyConflict,
+      handleBuilder1OwnershipFailure,
+      shouldClearBuilder1ActiveJobOnError,
+      clearBuilder1RecoveryState
+    ]
+  )
+
+  const handleResumePlanning = useCallback(
+    async (recoverable) => {
+      if (resumePlanningInFlightRef.current || generateRequestInFlightRef.current) return
+      if (reattachInFlightRef.current) return
+      if (cancellationGate !== 'ready' || initPhase !== 'done') return
+      if (readBuilder1ActiveJob() || readBuilder1PendingMutation()) return
+      if (!recoverable?.jobId || !isBuilder1PlanningResumeEligibleRecoverable(recoverable)) return
+
+      resumePlanningInFlightRef.current = true
+      setResumePlanningBusy(true)
+      generateRequestInFlightRef.current = true
+      const pollToken = ++initialPollTokenRef.current
+      const requestId = createBuilder1RequestId()
+
+      setError(null)
+      setComplianceRetryMessage(null)
+      setState(STATE.GENERATING)
+      beginProgress(BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN)
+      progressLanguageRef.current = displayLanguage
+
+      try {
+        await executeBuilder1PlanningResumeFlow({
+          jobId: recoverable.jobId,
+          campaignId: recoverable.campaignId,
+          requestId,
+          pollToken
+        })
+      } catch (err) {
+        handlePlanningResumeFailure(err, {
+          jobId: recoverable.jobId,
+          campaignId: recoverable.campaignId,
+          pollToken
+        })
+      } finally {
+        resumePlanningInFlightRef.current = false
+        setResumePlanningBusy(false)
+        if (initialPollTokenRef.current === pollToken) {
+          generateRequestInFlightRef.current = false
+        }
+      }
+    },
+    [
+      cancellationGate,
+      initPhase,
+      displayLanguage,
+      beginProgress,
+      executeBuilder1PlanningResumeFlow,
+      handlePlanningResumeFailure
+    ]
+  )
+
   useEffect(() => {
     const onPageHide = () => {
       const activeJob = readBuilder1ActiveJob()
@@ -701,6 +950,46 @@ function BuilderPage() {
 
     const pendingMutation = readBuilder1PendingMutation()
     const activeJob = readBuilder1ActiveJob()
+
+    if (pendingMutation?.operation === 'resume_planning') {
+      let cancelled = false
+      setCancellationGate('pending')
+      setInitPhase('cancelling')
+
+      ;(async () => {
+        const pollToken = ++initialPollTokenRef.current
+        try {
+          setState(STATE.GENERATING)
+          beginProgress(BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN)
+          progressLanguageRef.current = displayLanguage
+
+          await executeBuilder1PlanningResumeFlow({
+            jobId: pendingMutation.jobId,
+            campaignId: pendingMutation.campaignId,
+            requestId: pendingMutation.requestId,
+            pollToken,
+            pendingAlreadyWritten: true
+          })
+        } catch (err) {
+          if (!cancelled) {
+            handlePlanningResumeFailure(err, {
+              jobId: pendingMutation.jobId,
+              campaignId: pendingMutation.campaignId,
+              pollToken
+            })
+          }
+        } finally {
+          if (!cancelled) {
+            setCancellationGate('ready')
+            setInitPhase('done')
+          }
+        }
+      })()
+
+      return () => {
+        cancelled = true
+      }
+    }
 
     if (!isUnresolvedBuilder1PendingMutation(pendingMutation) && !activeJob?.jobId) {
       setCancellationGate('ready')
@@ -1434,6 +1723,16 @@ function BuilderPage() {
       return
     }
 
+    if (lastHydratedCampaignIdRef.current) {
+      setError(
+        displayLanguage === 'he'
+          ? 'מצב הקמפיין אבד. נא לרענן או להשתמש בקישור השחזור — לא ניתן ליצור קמפיין חדש במקום.'
+          : 'Campaign state was lost. Please refresh or use the recovery link instead of starting a new paid campaign.'
+      )
+      setState(STATE.ERROR)
+      return
+    }
+
     handleInitialSubmit(data)
   }
 
@@ -1447,7 +1746,11 @@ function BuilderPage() {
     }
     const recoverable = readBuilder1RecoverableTerminalJob()
     if (recoverable?.jobId) {
-      void runBuilder1Reattach(recoverable.jobId, { showProgress: true })
+      if (isBuilder1PlanningResumeEligibleRecoverable(recoverable)) {
+        void handleResumePlanning(recoverable)
+      } else {
+        void runBuilder1Reattach(recoverable.jobId, { showProgress: true })
+      }
       return
     }
     handleInitialSubmit(formData)
@@ -1506,11 +1809,12 @@ function BuilderPage() {
   }
 
   useEffect(() => {
-    if (fillingResolvedNameRef.current) {
-      fillingResolvedNameRef.current = false
+    if (hydrationFormSyncRef.current) {
+      hydrationFormSyncRef.current = false
       return
     }
     setCampaignSession(null)
+    lastHydratedCampaignIdRef.current = null
     setRateLimitState(null)
     lockedTargetAdCountRef.current = readBuilder1CampaignAdCount()
     setTargetAdCount(lockedTargetAdCountRef.current)
@@ -1556,6 +1860,7 @@ function BuilderPage() {
         fieldsLocked={fieldsLocked}
         buttonText={generateButtonLabel}
         buttonDisabled={generateButtonDisabled}
+        skipSubmitValidation={skipProductFormValidation}
         showSubmitButton
         showProgress={generationProgressVisible}
         progressMode="builder1"

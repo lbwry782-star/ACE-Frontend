@@ -184,6 +184,27 @@ export function isBuilder1IdempotencyConflict(payload, httpStatus) {
 /**
  * @param {object|null|undefined} payload
  */
+/**
+ * @param {object|null|undefined} payload
+ * @param {number} [httpStatus]
+ */
+export function isBuilder1PlanningResumeNotEligible(payload, httpStatus) {
+  const code = String(payload?.error ?? payload?.code ?? '')
+    .trim()
+    .toLowerCase()
+  return code === 'planning_resume_not_eligible'
+}
+
+/**
+ * @param {Response|null|undefined} response
+ * @param {object|null|undefined} payload
+ */
+export function isBuilder1PlanningResumeAccepted(response, payload) {
+  if (isBuilder1PlanningResumeNotEligible(payload, response?.status)) return false
+  const status = Number(response?.status ?? payload?.httpStatus ?? 0)
+  return response?.ok === true || status === 202
+}
+
 export function extractBuilder1MutationJobIds(payload) {
   if (!payload || typeof payload !== 'object') {
     return { jobId: null, campaignId: null, idempotentReplay: false }
