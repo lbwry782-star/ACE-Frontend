@@ -9,6 +9,7 @@ import BuilderPage from './pages/Builder/BuilderPage'
 import Builder2Page from './pages/Builder2/Builder2Page'
 import DemoPage from './pages/Demo/DemoPage'
 import DemoPage2 from './pages/Demo2/DemoPage2'
+import { fetchSecurityConfig } from './services/api'
 import { buildBuilder1PaymentReturnHash } from './utils/builder1Checkout.js'
 
 // Backend security config; default true (secure) until fetched. Consumed by App and BuilderPage.
