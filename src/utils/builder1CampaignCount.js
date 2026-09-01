@@ -2,6 +2,8 @@
  * Canonical Builder1 campaign ad-count storage (Preview1 → Builder1).
  */
 
+import { resolveBuilder1CheckoutAdCount } from './builder1Checkout.js'
+
 /** Primary storage key for selected campaign size (2–4 ads). */
 export const BUILDER1_CAMPAIGN_AD_COUNT_KEY = 'ace_builder1_campaign_ad_count'
 
@@ -130,16 +132,12 @@ export function readBuilder1CampaignAdCount() {
 
 /**
  * Resolve ad count for the initial generate request.
- * Uses an already-locked session target when present.
- * @param {{ targetAdCount?: number|null }} [ctx]
+ * Uses an already-locked session target when present, otherwise checkout-scoped selection.
+ * @param {{ targetAdCount?: number|null, checkoutId?: string|null, search?: string, hash?: string }} [ctx]
  * @returns {number}
  */
 export function resolveBuilder1InitialAdCount(ctx = {}) {
-  const locked = Number(ctx.targetAdCount)
-  if (Number.isInteger(locked) && locked >= 2 && locked <= 4) {
-    return locked
-  }
-  return readBuilder1CampaignAdCount()
+  return resolveBuilder1CheckoutAdCount(ctx).adCount
 }
 
 /**

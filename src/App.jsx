@@ -9,7 +9,7 @@ import BuilderPage from './pages/Builder/BuilderPage'
 import Builder2Page from './pages/Builder2/Builder2Page'
 import DemoPage from './pages/Demo/DemoPage'
 import DemoPage2 from './pages/Demo2/DemoPage2'
-import { fetchSecurityConfig } from './services/api'
+import { buildBuilder1PaymentReturnHash } from './utils/builder1Checkout.js'
 
 // Backend security config; default true (secure) until fetched. Consumed by App and BuilderPage.
 export const SecurityConfigContext = createContext({
@@ -59,7 +59,7 @@ function App() {
     if (!isAlreadyInBuilder && (ssFlag === '1' || lsFlag === '1')) {
       sessionStorage.removeItem('ace_payment_return_pending')
       localStorage.removeItem('ace_payment_return_pending')
-      window.location.hash = '#/builder?fromPayment=1'
+      window.location.hash = buildBuilder1PaymentReturnHash(sessionStorage)
       return
     }
     // Do not clean when already on Builder or URL has lawful marker (e.g. second run after we set hash, or Strict Mode remount)

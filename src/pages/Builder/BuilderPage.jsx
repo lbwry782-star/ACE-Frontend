@@ -57,7 +57,6 @@ import {
   isBuilder1PlanningResumeAccepted
 } from '../../utils/builder1Status'
 import {
-  readBuilder1CampaignAdCount,
   resolveBuilder1InitialAdCount,
   getBuilder1GenerateButtonLabel,
   normalizeBuilder1FormatForApi,
@@ -94,6 +93,10 @@ import {
   BUILDER1_RETRY_MODE
 } from '../../utils/builder1Campaign'
 import { mergeBuilder1FormWithHydratedSession } from '../../utils/builder1HydratedCampaignUi'
+import {
+  resolveBuilder1CheckoutAdCount,
+  readBuilder1CheckoutIdFromRoute
+} from '../../utils/builder1Checkout.js'
 import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
   BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS,
@@ -209,7 +212,12 @@ function BuilderPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [state, setState] = useState(STATE.IDLE)
-  const [targetAdCount, setTargetAdCount] = useState(() => readBuilder1CampaignAdCount())
+  const [targetAdCount, setTargetAdCount] = useState(() =>
+    resolveBuilder1CheckoutAdCount({
+      search: typeof window !== 'undefined' ? window.location.search : '',
+      hash: typeof window !== 'undefined' ? window.location.hash : ''
+    }).adCount
+  )
   const [campaignSession, setCampaignSession] = useState(null)
   const [formData, setFormData] = useState({
     productName: '',
@@ -265,6 +273,18 @@ function BuilderPage() {
   const resumePlanningInFlightRef = useRef(false)
   const recoverBootstrapJobIdRef = useRef(null)
   const recoverBootstrapAttemptsRef = useRef(0)
+  const activeCheckoutIdRef = useRef(null)
+
+  const resolveTabBuilder1AdCount = useCallback(() => {
+    const resolved = resolveBuilder1CheckoutAdCount({
+      checkoutId: readBuilder1CheckoutIdFromRoute(location.search, window.location.hash),
+      search: location.search,
+      hash: window.location.hash,
+      targetAdCount: lockedTargetAdCountRef.current
+    })
+    activeCheckoutIdRef.current = resolved.checkoutId
+    return resolved.adCount
+  }, [location.search])
 
   const [reattachBusy, setReattachBusy] = useState(false)
   const [resumePlanningBusy, setResumePlanningBusy] = useState(false)
@@ -306,12 +326,17 @@ function BuilderPage() {
   }, [clearProgressJobTiming])
 
   useEffect(() => {
-    const stored = readBuilder1CampaignAdCount()
-    setTargetAdCount(stored)
+    const resolved = resolveBuilder1CheckoutAdCount({
+      checkoutId: readBuilder1CheckoutIdFromRoute(location.search, window.location.hash),
+      search: location.search,
+      hash: window.location.hash
+    })
+    activeCheckoutIdRef.current = resolved.checkoutId
+    setTargetAdCount(resolved.adCount)
     if (lockedTargetAdCountRef.current == null) {
-      lockedTargetAdCountRef.current = stored
+      lockedTargetAdCountRef.current = resolved.adCount
     }
-  }, [])
+  }, [location.search])
 
   useEffect(() => {
     if (!rateLimitState?.retryAvailableAt) {
@@ -1178,7 +1203,10 @@ function BuilderPage() {
     const pollToken = ++initialPollTokenRef.current
     const userLeftProductNameEmpty = !nameValidation.productName
     const adCount = resolveBuilder1InitialAdCount({
-      targetAdCount: lockedTargetAdCountRef.current ?? targetAdCount
+      targetAdCount: lockedTargetAdCountRef.current ?? targetAdCount,
+      checkoutId: activeCheckoutIdRef.current,
+      search: location.search,
+      hash: window.location.hash
     })
     lockedTargetAdCountRef.current = adCount
     setTargetAdCount(adCount)
@@ -1816,9 +1844,10 @@ function BuilderPage() {
     setCampaignSession(null)
     lastHydratedCampaignIdRef.current = null
     setRateLimitState(null)
-    lockedTargetAdCountRef.current = readBuilder1CampaignAdCount()
-    setTargetAdCount(lockedTargetAdCountRef.current)
-  }, [formData.productName, formData.productDescription])
+    const resolvedAdCount = resolveTabBuilder1AdCount()
+    lockedTargetAdCountRef.current = resolvedAdCount
+    setTargetAdCount(resolvedAdCount)
+  }, [formData.productName, formData.productDescription, resolveTabBuilder1AdCount])
 
   const sortedAds = campaignSession ? sortAdsByIndex(campaignSession.ads) : []
   const campaignFormat =

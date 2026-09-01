@@ -167,7 +167,7 @@ assert.match(builderPageSource, /hydrationFormSyncRef/)
 assert.match(builderPageSource, /lastHydratedCampaignIdRef/)
 const formInvalidationEffect =
   builderPageSource.match(
-    /useEffect\(\(\) => \{\r?\n    if \(hydrationFormSyncRef\.current\)[\s\S]*?\}, \[formData\.productName, formData\.productDescription\]\)/
+    /useEffect\(\(\) => \{\r?\n    if \(hydrationFormSyncRef\.current\)[\s\S]*?\}, \[formData\.productName, formData\.productDescription[^\]]*\]\)/
   )?.[0] ?? ''
 assert.ok(formInvalidationEffect.length > 0, 'form invalidation effect with hydration guard not found')
 assert.match(formInvalidationEffect, /hydrationFormSyncRef\.current = false/)
