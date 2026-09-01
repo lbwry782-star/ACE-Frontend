@@ -22,16 +22,64 @@ export function isPlausibleBuilder1JobId(jobId) {
 }
 
 /**
+ * Route query from HashRouter location.search or hash fragment (never document search).
+ * @param {string|null|undefined} routeSearch
+ * @param {string|null|undefined} hash
+ */
+export function readBuilder1HashRouteQuery(routeSearch, hash) {
+  const rawSearch = String(routeSearch ?? '').trim()
+  if (rawSearch) {
+    return rawSearch.startsWith('?') ? rawSearch.slice(1) : rawSearch
+  }
+  const h = String(hash ?? '').trim()
+  const qIndex = h.indexOf('?')
+  if (qIndex < 0) return ''
+  return h.slice(qIndex + 1)
+}
+
+/**
+ * @param {string|null|undefined} query
+ */
+function readBuilder1RecoverJobIdFromQueryString(query) {
+  const q = String(query ?? '').trim()
+  if (!q) return null
+  const id = new URLSearchParams(q).get(BUILDER1_RECOVER_JOB_QUERY_PARAM)
+  if (!isPlausibleBuilder1JobId(id)) return null
+  return String(id).trim()
+}
+
+/**
+ * Canonical HashRouter recovery param reader — prefers route location.search.
+ * @param {string|null|undefined} routeSearch
+ * @param {string|null|undefined} [hash]
+ */
+export function readBuilder1RecoverJobIdFromRoute(routeSearch, hash) {
+  const fromRoute = readBuilder1RecoverJobIdFromQueryString(
+    readBuilder1HashRouteQuery(routeSearch, null)
+  )
+  if (fromRoute) return fromRoute
+  return readBuilder1RecoverJobIdFromQueryString(readBuilder1HashRouteQuery(null, hash))
+}
+
+/**
  * @param {string} [hash]
  */
 export function readBuilder1RecoverJobIdFromHash(hash) {
-  const h = String(hash ?? (typeof window !== 'undefined' ? window.location.hash : '') ?? '')
-  const qIndex = h.indexOf('?')
-  if (qIndex < 0) return null
-  const params = new URLSearchParams(h.slice(qIndex + 1))
-  const id = params.get(BUILDER1_RECOVER_JOB_QUERY_PARAM)
-  if (!isPlausibleBuilder1JobId(id)) return null
-  return String(id).trim()
+  return readBuilder1RecoverJobIdFromRoute(null, hash)
+}
+
+/**
+ * Strip recovery param from route search; returns next search or '' when removed, null if absent.
+ * @param {string|null|undefined} routeSearch
+ */
+export function stripBuilder1RecoverJobSearch(routeSearch) {
+  const query = readBuilder1HashRouteQuery(routeSearch, null)
+  if (!query) return null
+  const params = new URLSearchParams(query)
+  if (!params.has(BUILDER1_RECOVER_JOB_QUERY_PARAM)) return null
+  params.delete(BUILDER1_RECOVER_JOB_QUERY_PARAM)
+  const next = params.toString()
+  return next ? `?${next}` : ''
 }
 
 /**
@@ -49,6 +97,22 @@ export function stripBuilder1RecoverJobIdFromHash(hash) {
   params.delete(BUILDER1_RECOVER_JOB_QUERY_PARAM)
   const query = params.toString()
   return query ? `${path}?${query}` : path
+}
+
+/**
+ * @param {string|null|undefined} routeSearch
+ * @param {string|null|undefined} hash
+ */
+export function stripBuilder1RecoverJobFromRoute(routeSearch, hash) {
+  const nextSearch = stripBuilder1RecoverJobSearch(routeSearch)
+  if (nextSearch !== null) {
+    return { kind: 'search', value: nextSearch }
+  }
+  const nextHash = stripBuilder1RecoverJobIdFromHash(hash)
+  if (nextHash !== null) {
+    return { kind: 'hash', value: nextHash }
+  }
+  return null
 }
 
 /**

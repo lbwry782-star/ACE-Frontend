@@ -11,6 +11,7 @@ import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import { HashRouter } from 'react-router-dom'
 import { Window } from 'happy-dom'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -100,12 +101,19 @@ const server = await createServer({
 
 try {
   const { default: BuilderPage } = await server.ssrLoadModule('/src/pages/Builder/BuilderPage.jsx')
+  const { SecurityConfigContext } = await server.ssrLoadModule('/src/App.jsx')
 
   const reactRoot = createRoot(container)
 
   let mountError = null
   try {
-    reactRoot.render(React.createElement(BuilderPage))
+    reactRoot.render(
+      React.createElement(
+        SecurityConfigContext.Provider,
+        { value: { securityEnabled: false, securityConfigLoaded: true } },
+        React.createElement(HashRouter, null, React.createElement(BuilderPage))
+      )
+    )
     await window.happyDOM.waitUntilComplete()
     await new Promise((resolve) => setTimeout(resolve, 50))
   } catch (err) {

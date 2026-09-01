@@ -29,8 +29,11 @@ import {
 import {
   BUILDER1_RECOVER_JOB_QUERY_PARAM,
   isPlausibleBuilder1JobId,
+  readBuilder1RecoverJobIdFromRoute,
   readBuilder1RecoverJobIdFromHash,
+  stripBuilder1RecoverJobSearch,
   stripBuilder1RecoverJobIdFromHash,
+  stripBuilder1RecoverJobFromRoute,
   hydrateBuilder1SessionFromStatusResult,
   reattachBuilder1Job
 } from '../src/utils/builder1JobReattach.js'
@@ -138,23 +141,51 @@ const mountEffect =
 assert.doesNotMatch(mountEffect, /readBuilder1RecoverableTerminalJob/)
 assert.doesNotMatch(mountEffect, /cancelBuilder1Job\(.*recoverable/i)
 
-// 4. URL builder1RecoverJobId performs GET status only (bootstrap wiring)
+// 4. HashRouter URL parsing — route search preferred; document search ignored
 assert.equal(BUILDER1_RECOVER_JOB_QUERY_PARAM, 'builder1RecoverJobId')
 assert.ok(isPlausibleBuilder1JobId(PRODUCTION_JOB_ID))
+assert.equal(
+  readBuilder1RecoverJobIdFromRoute(
+    `?builder1RecoverJobId=${PRODUCTION_JOB_ID}`,
+    '#/builder'
+  ),
+  PRODUCTION_JOB_ID
+)
 assert.equal(
   readBuilder1RecoverJobIdFromHash(`#/builder?builder1RecoverJobId=${PRODUCTION_JOB_ID}`),
   PRODUCTION_JOB_ID
 )
-assert.equal(stripBuilder1RecoverJobIdFromHash(`#/builder?builder1RecoverJobId=${PRODUCTION_JOB_ID}`), '#/builder')
-assert.match(builder1PageSource, /readBuilder1RecoverJobIdFromHash/)
-assert.match(builder1PageSource, /stripBuilder1RecoverJobIdFromHash/)
+assert.equal(
+  readBuilder1RecoverJobIdFromRoute('', `#/builder?builder1RecoverJobId=${PRODUCTION_JOB_ID}`),
+  PRODUCTION_JOB_ID
+)
+assert.equal(readBuilder1RecoverJobIdFromRoute('', '#/builder'), null)
+assert.equal(readBuilder1RecoverJobIdFromRoute('?builder1RecoverJobId=not-a-uuid', '#/builder'), null)
+assert.equal(
+  stripBuilder1RecoverJobSearch(`?builder1RecoverJobId=${PRODUCTION_JOB_ID}`),
+  ''
+)
+assert.equal(
+  stripBuilder1RecoverJobIdFromHash(`#/builder?builder1RecoverJobId=${PRODUCTION_JOB_ID}`),
+  '#/builder'
+)
+assert.deepEqual(stripBuilder1RecoverJobFromRoute(`?builder1RecoverJobId=${PRODUCTION_JOB_ID}`, '#/builder'), {
+  kind: 'search',
+  value: ''
+})
+assert.doesNotMatch(reattachSource, /window\.location\.search.*builder1RecoverJobId/)
+assert.match(builder1PageSource, /readBuilder1RecoverJobIdFromRoute/)
+assert.match(builder1PageSource, /useLocation/)
+assert.match(builder1PageSource, /stripBuilder1RecoverJobFromRoute|stripRecoveryQueryParam/)
+assert.match(builder1PageSource, /BUILDER1_REATTACH_BOOTSTRAP/)
 assert.match(builder1PageSource, /runBuilder1Reattach/)
 const recoverBootstrapEffect =
   builder1PageSource.match(
-    /useEffect\(\(\) => \{\r?\n    if \(cancellationGate !== 'ready'[\s\S]*?runBuilder1Reattach\(jobIdFromUrl[\s\S]*?\}, \[cancellationGate, initPhase, runBuilder1Reattach\]\)/
+    /useEffect\(\(\) => \{\r?\n    if \(cancellationGate !== 'ready'[\s\S]*?runBuilder1Reattach\(jobId[\s\S]*?\}, \[[\s\S]*?stripRecoveryQueryParam[\s\S]*?\]\)/
   )?.[0] ?? ''
 assert.ok(recoverBootstrapEffect.length > 0, 'recover bootstrap effect present')
 assert.doesNotMatch(recoverBootstrapEffect, /writeBuilder1ActiveJob|builder1Generate|cancelBuilder1Job/)
+assert.doesNotMatch(recoverBootstrapEffect, /recoverBootstrapRef/)
 
 // 5–7. DONE recovered status hydrates campaign session with partial counts
 const result = makeRecoveredPartialResult()
@@ -302,4 +333,4 @@ for (const src of [builder1PageSource, reattachSource, builder1ApiSource]) {
 
 clearBuilder1RecoverableTerminalJob(sessionStorage)
 
-console.log('builder1 recovery tests passed (20 cases)')
+console.log('builder1 recovery tests passed (HashRouter + reattach cases)')

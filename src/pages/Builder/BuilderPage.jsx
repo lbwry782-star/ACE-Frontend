@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useContext } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import ProductForm from '../../components/Form/ProductForm'
 import AdCard from '../../components/AdCard/AdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
@@ -35,8 +36,9 @@ import {
   persistBuilder1RecoverableTerminalJobIfEligible
 } from '../../utils/builder1RecoverableTerminalJob'
 import {
-  readBuilder1RecoverJobIdFromHash,
-  stripBuilder1RecoverJobIdFromHash,
+  BUILDER1_RECOVER_JOB_QUERY_PARAM,
+  readBuilder1RecoverJobIdFromRoute,
+  stripBuilder1RecoverJobFromRoute,
   reattachBuilder1Job
 } from '../../utils/builder1JobReattach'
 import {
@@ -196,6 +198,8 @@ function mapUserFacingError(err, code) {
 
 function BuilderPage() {
   const { securityEnabled = true, securityConfigLoaded = false } = useContext(SecurityConfigContext)
+  const location = useLocation()
+  const navigate = useNavigate()
   const [state, setState] = useState(STATE.IDLE)
   const [targetAdCount, setTargetAdCount] = useState(() => readBuilder1CampaignAdCount())
   const [campaignSession, setCampaignSession] = useState(null)
@@ -249,7 +253,8 @@ function BuilderPage() {
   const progressActiveJobIdRef = useRef(null)
   const reattachInFlightRef = useRef(false)
   const reattachPollTokenRef = useRef(0)
-  const recoverBootstrapRef = useRef(false)
+  const recoverBootstrapJobIdRef = useRef(null)
+  const recoverBootstrapAttemptsRef = useRef(0)
 
   const [reattachBusy, setReattachBusy] = useState(false)
 
@@ -261,6 +266,23 @@ function BuilderPage() {
     progressJobStartMsRef.current = null
     setProgressJobStartMs(null)
   }, [])
+
+  const stripRecoveryQueryParam = useCallback(() => {
+    const stripped = stripBuilder1RecoverJobFromRoute(location.search, window.location.hash)
+    if (!stripped) return
+    if (stripped.kind === 'search') {
+      navigate(
+        { pathname: location.pathname || '/builder', search: stripped.value },
+        { replace: true }
+      )
+      return
+    }
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${window.location.search}${stripped.value}`
+    )
+  }, [location.pathname, location.search, navigate])
 
   useEffect(() => {
     mountedRef.current = true
@@ -575,8 +597,9 @@ function BuilderPage() {
       setOwnershipError(null)
       setFieldsLocked(true)
       setState(STATE.SUCCESS)
+      stripRecoveryQueryParam()
     },
-    [clearProgressJobTiming, clearBuilder1RecoveryState]
+    [clearProgressJobTiming, clearBuilder1RecoveryState, stripRecoveryQueryParam]
   )
 
   const runBuilder1Reattach = useCallback(
@@ -789,23 +812,47 @@ function BuilderPage() {
 
   useEffect(() => {
     if (cancellationGate !== 'ready' || initPhase !== 'done') return
-    if (recoverBootstrapRef.current) return
 
-    const jobIdFromUrl = readBuilder1RecoverJobIdFromHash()
-    if (!jobIdFromUrl) return
-
-    recoverBootstrapRef.current = true
-    const strippedHash = stripBuilder1RecoverJobIdFromHash()
-    if (strippedHash != null && typeof window !== 'undefined') {
-      window.history.replaceState(
-        null,
-        '',
-        `${window.location.pathname}${window.location.search}${strippedHash}`
-      )
+    if (campaignSession?.campaignId) {
+      stripRecoveryQueryParam()
+      return
     }
 
-    void runBuilder1Reattach(jobIdFromUrl, { showProgress: true })
-  }, [cancellationGate, initPhase, runBuilder1Reattach])
+    if (reattachInFlightRef.current) return
+
+    const fromRoute = readBuilder1RecoverJobIdFromRoute(location.search, window.location.hash)
+    if (fromRoute) {
+      recoverBootstrapJobIdRef.current = fromRoute
+    }
+
+    const jobId = recoverBootstrapJobIdRef.current
+    if (!jobId) return
+
+    if (recoverBootstrapAttemptsRef.current >= 2) return
+    recoverBootstrapAttemptsRef.current += 1
+
+    const source =
+      fromRoute && String(location.search || '').includes(BUILDER1_RECOVER_JOB_QUERY_PARAM)
+        ? 'route_search'
+        : fromRoute
+          ? 'hash_route'
+          : 'bootstrap_ref'
+    console.log('[BUILDER1_REATTACH_BOOTSTRAP]', { jobIdPresent: true, source })
+
+    void runBuilder1Reattach(jobId, { showProgress: true }).finally(() => {
+      if (fromRoute) {
+        stripRecoveryQueryParam()
+      }
+    })
+  }, [
+    cancellationGate,
+    initPhase,
+    runBuilder1Reattach,
+    location.search,
+    location.pathname,
+    campaignSession?.campaignId,
+    stripRecoveryQueryParam
+  ])
 
   const handleInitialSubmit = async (data) => {
     if (generateRequestInFlightRef.current) return
