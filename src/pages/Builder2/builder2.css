@@ -1,5 +1,15 @@
 /* Builder2 — scoped tweaks; base layout from ../Builder/builder.css */
 
+.builder2-warning {
+  display: block;
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: center;
+}
+
 .builder2-page .product-form .product-form-name-resolved-display {
   font-weight: 800 !important;
   color: #ffffff !important;

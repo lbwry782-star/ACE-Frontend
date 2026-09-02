@@ -53,6 +53,16 @@ assert.doesNotMatch(productForm2Source, /Builder2ProgressBar/)
 assert.match(builder2PageSource, /builder2-progress-section/)
 assert.match(builder2PageSource, /builder-results/)
 
+const builder2TitleBlock =
+  builder2PageSource.match(/<div className="builder-title-block">[\s\S]*?<\/div>/)?.[0] ?? ''
+assert.match(builder2TitleBlock, /יוצר וידאו/)
+assert.match(builder2TitleBlock, /אין לרענן את הדף!/)
+assert.ok(
+  builder2TitleBlock.indexOf('יוצר וידאו') < builder2TitleBlock.indexOf('אין לרענן את הדף!'),
+  'refresh warning must appear below the Builder2 title'
+)
+assert.match(builder2PageSource, /builder2-warning/)
+
 // 7. Form fields start empty; legacy draft is not restored on mount
 assert.equal(BUILDER2_FORM_DRAFT_STORAGE_KEY, 'ace.builder2.formDraft.v1')
 writeBuilder2FormDraft(

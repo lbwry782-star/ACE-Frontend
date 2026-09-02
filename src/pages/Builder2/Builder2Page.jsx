@@ -695,6 +695,9 @@ function Builder2Page() {
     <div className="builder-page builder2-page">
       <div className="builder-title-block">
         <h1 className="builder-title">יוצר וידאו</h1>
+        <span className="builder2-warning" dir="rtl">
+          אין לרענן את הדף!
+        </span>
       </div>
 
       {initPhase === 'cancelling' ? (
