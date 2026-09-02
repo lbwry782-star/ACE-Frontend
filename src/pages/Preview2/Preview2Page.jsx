@@ -12,38 +12,28 @@ const MOBILE_LAYOUT_MQ = '(max-width: 768px)'
 const MOBILE_NAV_DELAY_MS = 1000
 /** Preview2 tier keys → iCount payment URLs */
 const PREVIEW2_PAYMENT_URLS = {
-  '1': 'https://app.icount.co.il/m/8ca25',
-  '2': 'https://app.icount.co.il/m/0a7c0',
-  '5': 'https://app.icount.co.il/m/c87e3'
+  '2': 'https://app.icount.co.il/m/0a7c0/c6937615p17u6a98a23?utm_source=iCount&utm_medium=paypage&utm_campaign=23',
+  '1': 'https://app.icount.co.il/m/8ca25/c6937615p12u6a98a2e?utm_source=iCount&utm_medium=paypage&utm_campaign=18'
 }
 
 const PREVIEW2_ASSETS = [
   {
-    key: '5',
-    defaultSrc: `${BASE_URL}assets/8.png`,
-    hoverSrc: `${BASE_URL}assets/Hover8.png`,
-    lines: [
-      '● 4 סרטונים ב-120 ש"ח',
-      '● 30 ש"ח לסרטון',
-      '● טקסט שיווקי בן 50 מילים לכל סרטון',
-      '● מיועד לקמפיין בן 4 סרטונים (משך הפקה - כשעתיים)'
-    ]
-  },
-  {
     key: '2',
-    defaultSrc: `${BASE_URL}assets/7.png`,
-    hoverSrc: `${BASE_URL}assets/Hover7.png`,
+    videoCount: 2,
+    defaultSrc: `${BASE_URL}assets/6.png`,
+    hoverSrc: `${BASE_URL}assets/Hover6.png`,
     lines: [
-      '● 3 סרטונים ב-100 ש"ח',
+      '● 2 סרטונים ב-140 ש"ח',
       '● טקסט שיווקי בן 50 מילים לכל סרטון',
-      '● אפשרות השוואה ובחירה בין שלושה סרטונים'
+      '● אפשרות השוואה ובחירה בין שני סרטונים'
     ]
   },
   {
     key: '1',
-    defaultSrc: `${BASE_URL}assets/6.png`,
-    hoverSrc: `${BASE_URL}assets/Hover6.png`,
-    lines: ['● 2 סרטונים ב-80 ש"ח', '● טקסט שיווקי בן 50 מילים']
+    videoCount: 1,
+    defaultSrc: `${BASE_URL}assets/7.png`,
+    hoverSrc: `${BASE_URL}assets/Hover7.png`,
+    lines: ['● סרטון אחד ב-80 ש"ח', '● טקסט שיווקי בן 50 מילים']
   }
 ]
 
@@ -128,7 +118,9 @@ function Preview2Page() {
           </Link>
         </div>
       </div>
-      <div className={`preview-asset-row${isMobile ? ' preview-asset-row--mobile' : ''}`}>
+      <div
+        className={`preview-asset-row preview-asset-row--preview2-two${isMobile ? ' preview-asset-row--mobile' : ''}`}
+      >
         {PREVIEW2_ASSETS.map(({ key, defaultSrc, hoverSrc, lines }) => (
           <div key={key} className="preview-asset-group">
             <button

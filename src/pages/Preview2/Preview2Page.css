@@ -86,3 +86,12 @@
     height: auto;
   }
 }
+
+/* PREVIEW2: centered two-offer row (no third-column slot) */
+.preview-asset-row.preview-asset-row--preview2-two {
+  justify-content: center;
+  gap: clamp(20px, 4vw, 56px);
+  max-width: min(100%, 820px);
+  margin-left: auto;
+  margin-right: auto;
+}
