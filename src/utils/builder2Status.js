@@ -266,6 +266,8 @@ export function resolveBuilder2MarketingText(payload) {
 export function buildBuilder2VideoResult(payload) {
   const videoUrl = resolveBuilder2FinalVideoUrl(payload)
   const marketingText = resolveBuilder2MarketingText(payload)
+  const videoIndexRaw = payload?.videoIndex ?? payload?.video_index
+  const videoIndex = Number.isInteger(Number(videoIndexRaw)) ? Number(videoIndexRaw) : null
   return {
     videoUrl: videoUrl || null,
     marketingText,
@@ -279,7 +281,10 @@ export function buildBuilder2VideoResult(payload) {
       payload?.resolved_product_name ??
       null,
     sessionId: payload?.sessionId ?? payload?.session_id ?? null,
-    jobId: payload?.jobId ?? payload?.job_id ?? null
+    jobId: payload?.jobId ?? payload?.job_id ?? null,
+    videoIndex,
+    isPlaceholder: Boolean(payload?.isPlaceholder),
+    placeholderLabel: payload?.placeholderLabel ?? null
   }
 }
 

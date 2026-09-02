@@ -8,12 +8,14 @@ import './video-ad-card.css'
  */
 function VideoAdCard({
   attemptNumber: _attemptNumber,
+  jobId: propJobId,
   videoSrc: propVideoSrc,
   marketingText: propMarketingText,
   headline: propHeadline,
   headlineText: propHeadlineText,
   overlayHeadline: propOverlayHeadline,
   productNameResolved: propProductNameResolved,
+  placeholderLabel,
   isGenerating,
   onPlaybackError
 }) {
@@ -73,18 +75,19 @@ function VideoAdCard({
   const videoUrl = String(videoSrc ?? '').trim()
   const marketingCopy = marketingText == null ? '' : String(marketingText)
   const hasMarketingText = marketingCopy.length > 0
-  const canDownload = !isGenerating && !downloadLoading && !!videoUrl && hasMarketingText
+  const downloadJobId = String(propJobId ?? '').trim()
+  const canDownload =
+    !isGenerating && !downloadLoading && !!videoUrl && hasMarketingText && !!downloadJobId
 
   const handleDownload = async () => {
     if (!canDownload) return
-    if (!videoUrl || !hasMarketingText) return
+    if (!downloadJobId) return
 
     setDownloadLoading(true)
     setDownloadError(null)
     try {
       const { blob, filename } = await downloadBuilder2Zip({
-        videoUrl,
-        marketingText: marketingCopy
+        jobId: downloadJobId
       })
       const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -105,6 +108,11 @@ function VideoAdCard({
 
   return (
     <div className="ad-card">
+      {placeholderLabel ? (
+        <p className="ad-card-placeholder-label" dir="ltr" aria-label="Test placeholder marker">
+          {placeholderLabel}
+        </p>
+      ) : null}
       {videoSrc && (
         <div className="ad-card-video-wrap">
           <video
@@ -142,7 +150,7 @@ function VideoAdCard({
         type="button"
         className="ad-card-download"
         onClick={handleDownload}
-        disabled={isGenerating || !videoUrl || !hasMarketingText || downloadLoading}
+        disabled={isGenerating || !videoUrl || !hasMarketingText || !downloadJobId || downloadLoading}
       >
         {downloadLoading ? 'Downloading…' : 'DOWNLOAD ZIP להורדה'}
       </button>

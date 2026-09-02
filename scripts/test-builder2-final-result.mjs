@@ -69,10 +69,10 @@ assert.doesNotMatch(videoAdCardSource, /download-video-zip/)
 assert.doesNotMatch(videoAdCardSource, /ace-backend-k1p6\.onrender\.com/)
 assert.doesNotMatch(builder2PageSource, /download-video-zip/)
 
-// E. Request body — exact videoUrl + marketingText JSON
+// E. Request body — exact jobId JSON
 assert.match(
   apiSource,
-  /JSON\.stringify\(\{\s*videoUrl:\s*url,\s*marketingText:\s*text\s*\}\)/
+  /JSON\.stringify\(\{\s*jobId: trimmedJobId\s*\}\)/
 )
 
 // F. Blob download — no browser navigation to backend

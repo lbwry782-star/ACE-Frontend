@@ -1,4 +1,11 @@
 import { getBuilder2OwnerBatchStateHeader } from '../utils/builder2OwnerContext.js'
+import {
+  isBuilder2OfflinePlaceholderModeActive,
+  offlineGenerateVideo,
+  offlineGenerateVideoNext,
+  offlineFetchVideoStatus,
+  offlineDownloadBuilder2Zip
+} from '../utils/builder2OfflinePlaceholders.js'
 
 // Get backend URL from environment variables
 // Support both Vite (import.meta.env) and CRA (process.env)
@@ -343,8 +350,20 @@ async function generate(payload) {
 /**
  * POST /api/generate-video — starts async video job; returns immediately with jobId (Builder2).
  */
-async function generateVideo({ productName, productDescription, signal } = {}) {
+async function generateVideo({ productName, productDescription, targetVideoCount, signal } = {}) {
+  if (isBuilder2OfflinePlaceholderModeActive()) {
+    return offlineGenerateVideo({ productName, productDescription, targetVideoCount })
+  }
+
   try {
+    const body = {
+      productName: productName ?? '',
+      productDescription: productDescription ?? ''
+    }
+    if (targetVideoCount === 1 || targetVideoCount === 2) {
+      body.targetVideoCount = targetVideoCount
+    }
+
     const response = await fetch(`${API_BASE_URL}/api/generate-video`, {
       method: 'POST',
       mode: 'cors',
@@ -353,10 +372,47 @@ async function generateVideo({ productName, productDescription, signal } = {}) {
       headers: buildBuilder2RequestHeaders({
         'Content-Type': 'application/json'
       }),
-      body: JSON.stringify({
-        productName: productName ?? '',
-        productDescription: productDescription ?? ''
-      })
+      body: JSON.stringify(body)
+    })
+    const data = await response.json().catch(() => null)
+    if (!data || typeof data !== 'object') {
+      return { ok: false }
+    }
+    if (!response.ok) {
+      return { ok: false, ...data }
+    }
+    return data
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, aborted: true }
+    }
+    return { ok: false }
+  }
+}
+
+/**
+ * POST /api/generate-video-next — starts Video #2 from existing allowance (Builder2).
+ */
+async function generateVideoNext({ videoAllowanceId, signal } = {}) {
+  if (isBuilder2OfflinePlaceholderModeActive()) {
+    return offlineGenerateVideoNext({ videoAllowanceId })
+  }
+
+  const allowanceId = String(videoAllowanceId ?? '').trim()
+  if (!allowanceId) {
+    return { ok: false, error: 'Missing videoAllowanceId' }
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/generate-video-next`, {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      signal,
+      headers: buildBuilder2RequestHeaders({
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({ videoAllowanceId: allowanceId })
     })
     const data = await response.json().catch(() => null)
     if (!data || typeof data !== 'object') {
@@ -378,6 +434,10 @@ async function generateVideo({ productName, productDescription, signal } = {}) {
  * GET /api/video-status?jobId=... — poll async Builder2 video job (owner context required).
  */
 async function fetchVideoStatus(jobId, { signal } = {}) {
+  if (isBuilder2OfflinePlaceholderModeActive()) {
+    return offlineFetchVideoStatus(jobId)
+  }
+
   try {
     const params = new URLSearchParams({ jobId: String(jobId) })
     const response = await fetch(`${API_BASE_URL}/api/video-status?${params}`, {
@@ -500,13 +560,16 @@ function parseContentDispositionFilename(header) {
 const BUILDER2_ZIP_DEFAULT_FILENAME = 'ace-builder2-video.zip'
 
 /**
- * POST /api/builder2-download-zip — download Builder2 result ZIP (binary blob).
+ * POST /api/builder2-download-zip — download Builder2 result ZIP by exact jobId (binary blob).
  */
-async function downloadBuilder2Zip({ videoUrl, marketingText, signal } = {}) {
-  const url = String(videoUrl ?? '').trim()
-  const text = marketingText == null ? '' : String(marketingText)
-  if (!url || !text) {
-    throw new Error('Missing videoUrl or marketingText')
+async function downloadBuilder2Zip({ jobId, signal } = {}) {
+  const trimmedJobId = String(jobId ?? '').trim()
+  if (!trimmedJobId) {
+    throw new Error('Missing jobId')
+  }
+
+  if (isBuilder2OfflinePlaceholderModeActive()) {
+    return offlineDownloadBuilder2Zip({ jobId: trimmedJobId })
   }
 
   const response = await fetch(`${API_BASE_URL}/api/builder2-download-zip`, {
@@ -518,7 +581,7 @@ async function downloadBuilder2Zip({ videoUrl, marketingText, signal } = {}) {
       'Content-Type': 'application/json',
       Accept: 'application/zip, application/octet-stream, */*'
     }),
-    body: JSON.stringify({ videoUrl: url, marketingText: text })
+    body: JSON.stringify({ jobId: trimmedJobId })
   })
 
   if (!response.ok) {
@@ -603,6 +666,7 @@ export {
   getJobStatus,
   generate,
   generateVideo,
+  generateVideoNext,
   fetchVideoStatus,
   cancelBuilder2Job,
   cancelBuilder2JobKeepalive,

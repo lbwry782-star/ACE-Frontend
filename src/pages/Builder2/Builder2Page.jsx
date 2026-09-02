@@ -3,8 +3,24 @@ import ProductForm2 from '../../components/Form/ProductForm2'
 import Builder2ProgressBar from '../../components/ProgressBar/Builder2ProgressBar'
 import VideoAdCard from '../../components/VideoAdCard/VideoAdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
-import { generateVideo, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive } from '../../services/api'
+import { generateVideo, generateVideoNext, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive } from '../../services/api'
 import { ensureBuilder2OwnerContext } from '../../utils/builder2OwnerContext'
+import {
+  resolveBuilder2CheckoutTargetVideoCount
+} from '../../utils/builder2VideoCheckout'
+import {
+  mergeBuilder2AllowanceState,
+  buildBuilder2CompletedVideoFromEntry,
+  parseBuilder2CompletedVideosFromStatus,
+  upsertBuilder2CompletedVideo,
+  getBuilder2GenerateButtonLabel,
+  isBuilder2GenerateButtonDisabled,
+  isBuilder2AllowanceConsumed
+} from '../../utils/builder2Allowance'
+import {
+  registerBuilder2OfflineConsoleHelpers,
+  resolveBuilder2OfflineTargetVideoCount
+} from '../../utils/builder2OfflinePlaceholders'
 import {
   readBuilder2CurrentJob,
   writeBuilder2CurrentJob,
@@ -119,6 +135,8 @@ function Builder2Page() {
   const [initPhase, setInitPhase] = useState('checking')
   const [cancellationGate, setCancellationGate] = useState('ready')
   const [videoResult, setVideoResult] = useState(null)
+  const [completedVideos, setCompletedVideos] = useState([])
+  const [allowanceState, setAllowanceState] = useState(null)
   const [failureInfo, setFailureInfo] = useState(null)
   const [ownershipError, setOwnershipError] = useState(null)
   const [errorMessage, setErrorMessage] = useState(null)
@@ -137,6 +155,9 @@ function Builder2Page() {
   const [progressStageLabel, setProgressStageLabel] = useState('')
 
   const submitInFlightRef = useRef(false)
+  const generateNextInFlightRef = useRef(false)
+  const allowanceLockedRef = useRef(false)
+  const initialTargetVideoCountRef = useRef(1)
   const pollGenerationRef = useRef(0)
   const pollAbortRef = useRef(null)
   const activeJobIdRef = useRef(null)
@@ -151,6 +172,17 @@ function Builder2Page() {
 
   useEffect(() => {
     clearBuilder2FormDraft()
+    registerBuilder2OfflineConsoleHelpers()
+    const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
+    if (offlineTarget === 1 || offlineTarget === 2) {
+      initialTargetVideoCountRef.current = offlineTarget
+    } else {
+      const resolved = resolveBuilder2CheckoutTargetVideoCount({
+        hash: window.location.hash,
+        search: window.location.search
+      })
+      initialTargetVideoCountRef.current = resolved.targetVideoCount
+    }
   }, [])
 
   const resetFreshFormFields = useCallback(() => {
@@ -253,6 +285,10 @@ function Builder2Page() {
     submitInFlightRef.current = false
 
     setVideoResult(null)
+    setCompletedVideos([])
+    setAllowanceState(null)
+    allowanceLockedRef.current = false
+    generateNextInFlightRef.current = false
     setFailureInfo(null)
     setOwnershipError(null)
     setErrorMessage(null)
@@ -262,6 +298,33 @@ function Builder2Page() {
     setProgressTiming(null)
     resetFreshFormFields()
   }, [resetFreshFormFields, stopPolling, stopProgressUi])
+
+  const applyAllowanceAndCompletedVideos = useCallback((statusPayload, jobId) => {
+    setAllowanceState((prev) => {
+      const merged = mergeBuilder2AllowanceState(prev, statusPayload)
+      if (merged?.videoAllowanceId) {
+        allowanceLockedRef.current = true
+      }
+      return merged
+    })
+
+    const fromVideos = parseBuilder2CompletedVideosFromStatus(statusPayload)
+    if (fromVideos.length > 0) {
+      setCompletedVideos(fromVideos)
+      return
+    }
+
+    const built = buildBuilder2CompletedVideoFromEntry(
+      {
+        ...statusPayload,
+        jobId: statusPayload?.jobId ?? statusPayload?.job_id ?? jobId
+      },
+      statusPayload
+    )
+    if (built) {
+      setCompletedVideos((prev) => upsertBuilder2CompletedVideo(prev, built))
+    }
+  }, [])
 
   const showCompletedResult = useCallback(
     (statusPayload, jobId, { immediate = false } = {}) => {
@@ -277,24 +340,47 @@ function Builder2Page() {
 
       updateBuilder2CurrentJobFromStatus(jobId, { ...statusPayload, status: 'done', completed: true })
       clearBuilder2ActiveJob()
+      clearBuilder2CurrentJob()
       setFailureInfo(null)
       setOwnershipError(null)
       setIsDisconnected(false)
 
+      const completedEntry = buildBuilder2CompletedVideoFromEntry(
+        {
+          ...statusPayload,
+          jobId: statusPayload?.jobId ?? statusPayload?.job_id ?? jobId,
+          videoUrl: built.videoUrl,
+          marketingText: built.marketingText,
+          headline: built.headline,
+          headlineText: built.headlineText,
+          overlayHeadline: built.overlayHeadline,
+          productNameResolved: built.productNameResolved,
+          sessionId: built.sessionId,
+          isPlaceholder: built.isPlaceholder,
+          placeholderLabel: built.placeholderLabel
+        },
+        statusPayload
+      )
+
       if (immediate) {
+        applyAllowanceAndCompletedVideos(statusPayload, jobId)
+        if (completedEntry) {
+          setCompletedVideos((prev) => upsertBuilder2CompletedVideo(prev, completedEntry))
+        }
         setVideoResult(built)
         setState(STATE.SUCCESS)
         stopProgressUi()
         submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
         return true
       }
 
-      pendingVideoResultRef.current = { result: built, jobId }
+      pendingVideoResultRef.current = { result: built, jobId, statusPayload, completedEntry }
       setProgressTaskSucceeded(true)
       setProgressPendingFinalUrl(false)
       return true
     },
-    [beginProgress, stopProgressUi]
+    [applyAllowanceAndCompletedVideos, beginProgress, stopProgressUi]
   )
 
   const handleProgressRevealReady = useCallback(() => {
@@ -302,15 +388,23 @@ function Builder2Page() {
     if (pending?.result) {
       setErrorMessage(null)
       setErrorPanelTitle('Generation failed')
-      setVideoResult(pending.result)
+      if (pending.statusPayload) {
+        applyAllowanceAndCompletedVideos(pending.statusPayload, pending.jobId)
+      }
+      if (pending.completedEntry) {
+        setCompletedVideos((prev) => upsertBuilder2CompletedVideo(prev, pending.completedEntry))
+      } else {
+        setVideoResult(pending.result)
+      }
       setState(STATE.SUCCESS)
     }
     pendingVideoResultRef.current = null
     stopProgressUi()
     setProgressTiming(null)
     submitInFlightRef.current = false
+    generateNextInFlightRef.current = false
     clearBuilder2ActiveJob()
-  }, [stopProgressUi])
+  }, [applyAllowanceAndCompletedVideos, stopProgressUi])
 
   const handleFailureFromStatus = useCallback(
     (statusPayload, jobId) => {
@@ -400,6 +494,8 @@ function Builder2Page() {
         return 'terminal'
       }
 
+      setAllowanceState((prev) => mergeBuilder2AllowanceState(prev, statusPayload))
+
       if (isBuilder2StatusCompleted(statusPayload)) {
         const finalUrl = resolveBuilder2FinalVideoUrl(statusPayload)
         if (!finalUrl) {
@@ -463,7 +559,8 @@ function Builder2Page() {
       handleFailureFromStatus,
       showCompletedResult,
       showProgressBar,
-      tryApplyResolvedProductName
+      tryApplyResolvedProductName,
+      mergeBuilder2AllowanceState
     ]
   )
 
@@ -591,18 +688,33 @@ function Builder2Page() {
   }, [resetFreshGenerationUi])
 
   const handleSubmit = async (data) => {
+    const persistedJob = readBuilder2CurrentJob()
+    const hasActiveIncompleteJob = Boolean(persistedJob?.jobId && !persistedJob?.completed)
+    const isGenerateNext = Boolean(
+      allowanceState?.canGenerateNext && allowanceState?.videoAllowanceId && !hasActiveIncompleteJob
+    )
+
     if (
       submitInFlightRef.current ||
+      (isGenerateNext && generateNextInFlightRef.current) ||
       cancellationGate !== 'ready' ||
       initPhase !== 'done' ||
-      readBuilder2CurrentJob()?.jobId ||
+      (hasActiveIncompleteJob && !isGenerateNext) ||
       state === STATE.GENERATING ||
       showProgressBar
     ) {
       return
     }
 
+    if (isBuilder2AllowanceConsumed(allowanceState)) {
+      return
+    }
+
     submitInFlightRef.current = true
+    if (isGenerateNext) {
+      generateNextInFlightRef.current = true
+    }
+
     userLeftProductNameEmptyRef.current = !data.productName?.trim()
 
     if (!userLeftProductNameEmptyRef.current) {
@@ -610,28 +722,47 @@ function Builder2Page() {
     }
     setFailureInfo(null)
     setOwnershipError(null)
-    setVideoResult(null)
+    if (!isGenerateNext) {
+      setVideoResult(null)
+      if (!allowanceLockedRef.current) {
+        setCompletedVideos([])
+        setAllowanceState(null)
+      }
+    }
     setIsDisconnected(false)
     setErrorMessage(null)
     setErrorPanelTitle('Generation failed')
     hadConfirmedRunningRef.current = false
 
     try {
-      const start = await generateVideo({
-        productName: data.productName,
-        productDescription: data.productDescription
-      })
+      let start
+      if (isGenerateNext) {
+        start = await generateVideoNext({
+          videoAllowanceId: allowanceState.videoAllowanceId
+        })
+      } else {
+        const targetVideoCount = allowanceLockedRef.current
+          ? allowanceState?.targetVideoCount ?? initialTargetVideoCountRef.current ?? 1
+          : initialTargetVideoCountRef.current ?? 1
+        start = await generateVideo({
+          productName: data.productName,
+          productDescription: data.productDescription,
+          targetVideoCount
+        })
+      }
 
       if (start?.aborted) {
         submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
         return
       }
 
       const rawJobId = start?.jobId ?? start?.job_id
       const jobId = rawJobId != null && String(rawJobId).trim() ? String(rawJobId).trim() : null
 
-      if (!start?.ok || !jobId) {
+      if (start?.ok === false || !jobId) {
         submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
         setErrorPanelTitle('Generation failed')
         setErrorMessage(
           start?.error || start?.message || 'Could not start video generation. Please try again.'
@@ -639,6 +770,14 @@ function Builder2Page() {
         setState(STATE.IDLE)
         return
       }
+
+      setAllowanceState((prev) => {
+        const merged = mergeBuilder2AllowanceState(prev, start)
+        if (merged?.videoAllowanceId) {
+          allowanceLockedRef.current = true
+        }
+        return merged
+      })
 
       writeBuilder2CurrentJob({
         jobId,
@@ -652,10 +791,13 @@ function Builder2Page() {
       progressActiveJobIdRef.current = jobId
       applyPollProgressTiming(jobId, start)
       beginProgress(jobId)
-      tryApplyResolvedProductName(start)
+      if (!isGenerateNext) {
+        tryApplyResolvedProductName(start)
+      }
       startPolling(jobId)
     } catch (_) {
       submitInFlightRef.current = false
+      generateNextInFlightRef.current = false
       setErrorPanelTitle('Generation failed')
       setErrorMessage('Something went wrong. Please try again.')
       setState(STATE.IDLE)
@@ -663,31 +805,42 @@ function Builder2Page() {
     }
   }
 
-  const hasPersistedJob = Boolean(readBuilder2CurrentJob()?.jobId)
+  const persistedJob = readBuilder2CurrentJob()
+  const hasActiveIncompleteJob = Boolean(persistedJob?.jobId && !persistedJob?.completed)
   const isActivelyProcessing = state === STATE.GENERATING || showProgressBar
   const fieldsReadOnly = isActivelyProcessing
-  const submitDisabled =
-    initPhase !== 'done' ||
-    cancellationGate !== 'ready' ||
-    submitInFlightRef.current ||
-    hasPersistedJob ||
-    isActivelyProcessing
+  const allowanceConsumed = isBuilder2AllowanceConsumed(allowanceState)
+  const submitDisabled = isBuilder2GenerateButtonDisabled({
+    initBlocked: initPhase !== 'done' || cancellationGate !== 'ready',
+    isActivelyProcessing,
+    submitInFlight: submitInFlightRef.current || generateNextInFlightRef.current,
+    hasActiveIncompleteJob,
+    consumed: allowanceConsumed,
+    canGenerateNext: Boolean(allowanceState?.canGenerateNext)
+  })
 
   const getButtonText = () => {
     if (cancellationGate === 'pending') return 'GENERATE'
-    if (hasPersistedJob && !isActivelyProcessing) return 'GENERATE AGAIN'
-    if (isActivelyProcessing) return 'GENERATING'
-    return 'GENERATE'
+    return getBuilder2GenerateButtonLabel({
+      isActivelyProcessing,
+      consumed: allowanceConsumed,
+      canGenerateNext: Boolean(allowanceState?.canGenerateNext)
+    })
   }
 
-  const handlePlaybackError = useCallback(async () => {
-    const jobId = activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId
-    if (!jobId) return
-    const st = await fetchVideoStatus(jobId)
+  const handlePlaybackError = useCallback(async (jobId) => {
+    const resolvedJobId = jobId ?? activeJobIdRef.current ?? readBuilder2CurrentJob()?.jobId
+    if (!resolvedJobId) return
+    const st = await fetchVideoStatus(resolvedJobId)
     const url = resolveBuilder2FinalVideoUrl(st)
     if (url) {
+      setCompletedVideos((prev) =>
+        prev.map((video) =>
+          video.jobId === resolvedJobId ? { ...video, videoUrl: url } : video
+        )
+      )
       setVideoResult((prev) => (prev ? { ...prev, videoUrl: url } : prev))
-      updateBuilder2CurrentJobFromStatus(jobId, st)
+      updateBuilder2CurrentJobFromStatus(resolvedJobId, st)
     }
   }, [])
 
@@ -781,20 +934,41 @@ function Builder2Page() {
         />
       ) : null}
 
-      {videoResult ? (
+      {completedVideos.length > 0 ? (
+        <div className="builder-results">
+          <h2 className="results-title">Results</h2>
+          {completedVideos.map((video) => (
+            <VideoAdCard
+              key={video.jobId}
+              attemptNumber={video.videoIndex}
+              jobId={video.jobId}
+              videoSrc={video.videoUrl}
+              marketingText={video.marketingText}
+              headline={video.headline}
+              headlineText={video.headlineText}
+              overlayHeadline={video.overlayHeadline}
+              productNameResolved={video.productNameResolved}
+              placeholderLabel={video.placeholderLabel}
+              isGenerating={false}
+              onPlaybackError={() => handlePlaybackError(video.jobId)}
+            />
+          ))}
+        </div>
+      ) : videoResult ? (
         <div className="builder-results">
           <h2 className="results-title">Results</h2>
           <VideoAdCard
             attemptNumber={1}
+            jobId={videoResult.jobId}
             videoSrc={videoResult.videoUrl}
             marketingText={videoResult.marketingText}
             headline={videoResult.headline}
             headlineText={videoResult.headlineText}
             overlayHeadline={videoResult.overlayHeadline}
             productNameResolved={videoResult.productNameResolved}
-            sessionId={videoResult.sessionId}
+            placeholderLabel={videoResult.placeholderLabel}
             isGenerating={state === STATE.GENERATING}
-            onPlaybackError={handlePlaybackError}
+            onPlaybackError={() => handlePlaybackError(videoResult.jobId)}
           />
         </div>
       ) : null}

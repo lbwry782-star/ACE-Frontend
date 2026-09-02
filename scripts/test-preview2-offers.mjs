@@ -20,6 +20,9 @@ const PAYMENT_URL_2 =
 const PAYMENT_URL_1 =
   'https://app.icount.co.il/m/8ca25/c6937615p12u6a98a2e?utm_source=iCount&utm_medium=paypage&utm_campaign=18'
 
+assert.match(preview2Source, /startBuilder2Preview2Checkout/)
+assert.match(preview2Source, /preview2TierKeyToTargetVideoCount/)
+
 // 1–3. 8.png tier removed; exactly two offers remain
 assert.doesNotMatch(preview2Source, /8\.png/)
 assert.doesNotMatch(preview2Source, /Hover8\.png/)

@@ -83,7 +83,7 @@ assert.match(builder2PageSource, /submitDisabled/)
 
 // 9–10. Progress and result are additive sections
 assert.match(builder2PageSource, /showProgressBar\s*\?/)
-assert.match(builder2PageSource, /videoResult\s*\?/)
+assert.match(builder2PageSource, /completedVideos\.length/)
 
 // 11–13. No still-processing public messaging
 assert.doesNotMatch(builder2PageSource, /Still processing/i)

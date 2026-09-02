@@ -1,4 +1,15 @@
-/* Builder2 — responsive video area (desktop + mobile), mirrors image block proportions */
+.ad-card-placeholder-label {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 2px dashed #ff9800;
+  border-radius: 4px;
+  color: #ffb74d;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.04em;
+  background: rgba(255, 152, 0, 0.08);
+}
+
 .ad-card-video-wrap {
   width: 100%;
   max-width: 100%;

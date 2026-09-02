@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
+import { startBuilder2Preview2Checkout, preview2TierKeyToTargetVideoCount } from '../../utils/builder2VideoCheckout'
 import '../Preview/preview.css'
 import './Preview2Page.css'
 
@@ -77,6 +78,9 @@ function Preview2Page() {
   }, [isMobile])
 
   const goToPayment = (assetKey) => {
+    const targetVideoCount = preview2TierKeyToTargetVideoCount(assetKey)
+    if (targetVideoCount == null) return
+    startBuilder2Preview2Checkout(targetVideoCount)
     const url = PREVIEW2_PAYMENT_URLS[assetKey]
     if (url) window.location.href = url
   }

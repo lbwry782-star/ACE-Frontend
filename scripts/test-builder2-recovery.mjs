@@ -204,7 +204,7 @@ assert.match(builder2PageSource, /onPlaybackError/)
 
 // 27. Playback failure refetches status
 assert.match(builder2PageSource, /handlePlaybackError/)
-assert.match(builder2PageSource, /fetchVideoStatus\(jobId\)/)
+assert.match(builder2PageSource, /fetchVideoStatus\(jobId/)
 
 // 28–29. Refresh clears in-session job; active job marker in sessionStorage
 assert.match(builder2PageSource, /clearBuilder2CurrentJob/)
