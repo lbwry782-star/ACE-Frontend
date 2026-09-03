@@ -10,6 +10,12 @@ import { mergeBuilder2AllowanceState, buildBuilder2CompletedVideoFromEntry } fro
 
 export const BUILDER2_OFFLINE_PLACEHOLDER_SESSION_KEY = 'ace.builder2.offlinePlaceholders.v1'
 
+/** Builder2-only custom event — helpers notify mounted Builder2Page without reload. */
+export const BUILDER2_OFFLINE_TEST_STATE_EVENT = 'ace:builder2-offline-test-state'
+
+export const BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE =
+  'Offline test armed — switch DevTools Network to Offline.'
+
 /** Distinct exactly-50-word placeholder marketing texts. */
 export const BUILDER2_PLACEHOLDER_MARKETING_TEXT_1 =
   'Placeholder marketing text number one for Builder2 offline testing only alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november'
@@ -64,6 +70,8 @@ export function enableBuilder2OfflinePlaceholderMode(targetVideoCount, sessionSt
   const normalized = targetVideoCount === 2 ? 2 : 1
   sessionStorage?.setItem(BUILDER2_OFFLINE_PLACEHOLDER_SESSION_KEY, String(normalized))
   resetBuilder2OfflinePlaceholderRuntime()
+  dispatchBuilder2OfflineTestStateChange({ targetVideoCount: normalized, armed: true })
+  syncBuilder2OfflineTestConsoleState()
   return normalized
 }
 
@@ -97,6 +105,48 @@ export function resolveBuilder2OfflineTargetVideoCount(ctx = {}) {
   if (!isBuilder2OfflinePlaceholderModeActive(ctx)) return null
   const sessionStorage = ctx.sessionStorage ?? globalThis.sessionStorage
   return readBuilder2OfflinePlaceholderFlag(sessionStorage) ?? 1
+}
+
+/**
+ * Armed test target (1|2) regardless of navigator.onLine — for runtime sync without reload.
+ * @param {Storage|null|undefined} sessionStorage
+ * @returns {1|2|null}
+ */
+export function readBuilder2OfflineArmedTargetVideoCount(sessionStorage = globalThis.sessionStorage) {
+  return readBuilder2OfflinePlaceholderFlag(sessionStorage)
+}
+
+/**
+ * @returns {boolean}
+ */
+export function isBuilder2OfflineTestArmedWhileOnline() {
+  return readBuilder2OfflinePlaceholderFlag() != null && !isBuilder2OfflinePlaceholderModeActive()
+}
+
+/**
+ * Notify mounted Builder2Page that test flag/runtime changed (no reload).
+ * @param {object} [detail]
+ */
+export function dispatchBuilder2OfflineTestStateChange(detail = {}) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(BUILDER2_OFFLINE_TEST_STATE_EVENT, { detail }))
+}
+
+/**
+ * Console-only state line for armed vs active offline test.
+ */
+export function syncBuilder2OfflineTestConsoleState() {
+  if (typeof console === 'undefined' || !console.info) return
+  const flag = readBuilder2OfflinePlaceholderFlag()
+  if (flag == null) return
+  const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+  if (!online) {
+    console.info(`[Builder2 offline test] ACTIVE targetVideoCount=${flag} network=offline`)
+    return
+  }
+  console.info(
+    `[Builder2 offline test] ARMED targetVideoCount=${flag} — switch DevTools Network to Offline. Do not reload. Then click GENERATE.`
+  )
 }
 
 function placeholderVideoUrl(_videoIndex) {
@@ -332,24 +382,12 @@ export async function offlineDownloadBuilder2Zip(params = {}) {
   return { blob, filename: `builder2-placeholder-video-${videoIndex}.zip` }
 }
 
-const BUILDER2_OFFLINE_TEST_RELOAD_HINT =
-  'Steps: 1) DevTools Network → Offline  2) Reload Builder2  3) Fill form  4) GENERATE'
+const BUILDER2_OFFLINE_TEST_USAGE_HINT =
+  'Switch DevTools Network to Offline. Do not reload. Then click GENERATE.'
 
-/**
- * Log mount-time offline test state (console only).
- */
+/** @deprecated Use syncBuilder2OfflineTestConsoleState — kept for test grep compatibility. */
 export function logBuilder2OfflineTestMountState() {
-  if (typeof console === 'undefined' || !console.info) return
-  const flag = readBuilder2OfflinePlaceholderFlag()
-  if (flag == null) return
-  const online = typeof navigator !== 'undefined' ? navigator.onLine : true
-  if (!online) {
-    console.info(`[Builder2 offline test] ACTIVE targetVideoCount=${flag} network=offline`)
-    return
-  }
-  console.info(
-    `[Builder2 offline test] flag present but INACTIVE until Network=Offline + reload Builder2 (targetVideoCount=${flag})`
-  )
+  syncBuilder2OfflineTestConsoleState()
 }
 
 /**
@@ -369,15 +407,16 @@ export function registerBuilder2OfflineConsoleHelpers() {
 
   window.__builder2OfflineOneVideo = () => {
     enableBuilder2OfflinePlaceholderMode(1)
-    console.info(`[Builder2 offline test] 1-video flag set. ${BUILDER2_OFFLINE_TEST_RELOAD_HINT}`)
+    console.info(`[Builder2 offline test] 1-video test armed. ${BUILDER2_OFFLINE_TEST_USAGE_HINT}`)
   }
   window.__builder2OfflineTwoVideos = () => {
     enableBuilder2OfflinePlaceholderMode(2)
-    console.info(`[Builder2 offline test] 2-video flag set. ${BUILDER2_OFFLINE_TEST_RELOAD_HINT}`)
+    console.info(`[Builder2 offline test] 2-video test armed. ${BUILDER2_OFFLINE_TEST_USAGE_HINT}`)
   }
   window.__resetBuilder2OfflineTest = () => {
     clearBuilder2OfflinePlaceholderFlag()
     resetBuilder2OfflinePlaceholderRuntime()
+    dispatchBuilder2OfflineTestStateChange({ cleared: true })
     console.info('[Builder2 offline test] Flag cleared and offline runtime reset.')
   }
 }

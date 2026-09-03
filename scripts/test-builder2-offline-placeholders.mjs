@@ -17,6 +17,8 @@ import {
 } from '../src/utils/builder2Status.js'
 import {
   BUILDER2_OFFLINE_PLACEHOLDER_SESSION_KEY,
+  BUILDER2_OFFLINE_TEST_STATE_EVENT,
+  BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE,
   BUILDER2_PLACEHOLDER_MARKETING_TEXT_1,
   BUILDER2_PLACEHOLDER_MARKETING_TEXT_2,
   BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS,
@@ -24,6 +26,9 @@ import {
   clearBuilder2OfflinePlaceholderFlag,
   isBuilder2OfflinePlaceholderModeActive,
   isBuilder2OfflineTestFlagPendingActivation,
+  isBuilder2OfflineTestArmedWhileOnline,
+  readBuilder2OfflineArmedTargetVideoCount,
+  dispatchBuilder2OfflineTestStateChange,
   resolveBuilder2OfflineTargetVideoCount,
   offlineGenerateVideo,
   offlineGenerateVideoNext,
@@ -93,6 +98,16 @@ globalThis.navigator.onLine = false
 assert.equal(isBuilder2OfflineTestFlagPendingActivation(), false)
 assert.equal(isBuilder2OfflinePlaceholderModeActive(offlineCtx(false)), true)
 assert.equal(resolveBuilder2OfflineTargetVideoCount(offlineCtx(false)), 2)
+assert.equal(readBuilder2OfflineArmedTargetVideoCount(session), 2)
+
+// Dynamic online → offline on same runtime (no remount/reload)
+globalThis.navigator.onLine = true
+assert.equal(isBuilder2OfflineTestArmedWhileOnline(), true)
+assert.equal(isBuilder2OfflinePlaceholderModeActive(), false)
+globalThis.navigator.onLine = false
+assert.equal(isBuilder2OfflineTestArmedWhileOnline(), false)
+assert.equal(isBuilder2OfflinePlaceholderModeActive(), true)
+assert.equal(resolveBuilder2OfflineTargetVideoCount(), 2)
 
 assertBuilder2PlaceholderMarketingTexts()
 assert.equal(countMarketingWords(BUILDER2_PLACEHOLDER_MARKETING_TEXT_1), 50)
@@ -157,26 +172,49 @@ assert.equal(zip2Text, marketingTextForVideoIndex(2))
 assert.notEqual(zip2Text, marketingTextForVideoIndex(1))
 
 fetchCalls = 0
+globalThis.navigator.onLine = true
+enableBuilder2OfflinePlaceholderMode(2, session)
 const { generateVideo, generateVideoNext, fetchVideoStatus, downloadBuilder2Zip } = await import(
   '../src/services/api.js'
 )
-enableBuilder2OfflinePlaceholderMode(2, session)
-resetBuilder2OfflinePlaceholderRuntime()
-const gen = await generateVideo({ productName: 'x', productDescription: 'y', targetVideoCount: 2 })
-await generateVideoNext({ videoAllowanceId: gen.videoAllowanceId })
-await fetchVideoStatus(gen.jobId)
-await downloadBuilder2Zip({ jobId: gen.jobId })
+const blockedWhileOnline = await generateVideo({
+  productName: 'x',
+  productDescription: 'y',
+  targetVideoCount: 2
+})
+assert.equal(blockedWhileOnline.ok, false)
+assert.equal(blockedWhileOnline.error, 'offline_test_armed_online')
+assert.equal(blockedWhileOnline.message, BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
 assert.equal(fetchCalls, 0)
 
-assert.match(apiSource, /isBuilder2OfflinePlaceholderModeActive/)
-assert.match(builder2PageSource, /logBuilder2OfflineTestMountState/)
-assert.match(builder2PageSource, /isBuilder2OfflinePlaceholderModeActive/)
-assert.match(builder2PageSource, /readBuilder2OfflinePlaceholderFlag/)
-assert.match(offlineSource, /BUILDER2_OFFLINE_TEST_RELOAD_HINT/)
-assert.match(offlineSource, /Reload Builder2/)
-assert.match(offlineSource, /logBuilder2OfflineTestMountState/)
+globalThis.navigator.onLine = false
+resetBuilder2OfflinePlaceholderRuntime()
+const gen = await generateVideo({ productName: 'x', productDescription: 'y', targetVideoCount: 2 })
+assert.equal(gen.canGenerateNext, true)
+const gen2 = await generateVideoNext({ videoAllowanceId: gen.videoAllowanceId })
+assert.equal(gen2.videoIndex, 2)
+assert.equal(gen2.consumed, true)
+await fetchVideoStatus(gen.jobId)
+await downloadBuilder2Zip({ jobId: gen.jobId })
+await downloadBuilder2Zip({ jobId: gen2.jobId })
+assert.equal(fetchCalls, 0)
+assert.equal(getBuilder2GenerateButtonLabel({ consumed: true }), 'CONSUMED')
+
+assert.match(apiSource, /isBuilder2OfflineTestArmedWhileOnline/)
+assert.match(apiSource, /offline_test_armed_online/)
+assert.match(builder2PageSource, /BUILDER2_OFFLINE_TEST_STATE_EVENT/)
+assert.match(builder2PageSource, /addEventListener\('offline'/)
+assert.match(builder2PageSource, /syncOfflineTestRuntime/)
+assert.match(builder2PageSource, /BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE/)
+assert.match(offlineSource, /BUILDER2_OFFLINE_TEST_STATE_EVENT/)
+assert.match(offlineSource, /dispatchBuilder2OfflineTestStateChange/)
+assert.match(offlineSource, /Do not reload/)
+assert.doesNotMatch(offlineSource, /Reload Builder2/i)
+assert.doesNotMatch(offlineSource, /then open \/builder2/i)
 assert.match(offlineSource, /ACTIVE targetVideoCount=/)
-assert.match(offlineSource, /INACTIVE until Network=Offline/)
+assert.match(offlineSource, /ARMED targetVideoCount=/)
+assert.match(offlineSource, /cleared: true/)
+assert.equal(BUILDER2_OFFLINE_TEST_STATE_EVENT, 'ace:builder2-offline-test-state')
 assert.match(offlineSource, /window\.__builder2OfflineOneVideo/)
 assert.match(offlineSource, /window\.__builder2OfflineTwoVideos/)
 assert.match(offlineSource, /window\.__resetBuilder2OfflineTest/)

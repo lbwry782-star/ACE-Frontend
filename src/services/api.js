@@ -1,11 +1,21 @@
 import { getBuilder2OwnerBatchStateHeader } from '../utils/builder2OwnerContext.js'
 import {
   isBuilder2OfflinePlaceholderModeActive,
+  isBuilder2OfflineTestArmedWhileOnline,
+  BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE,
   offlineGenerateVideo,
   offlineGenerateVideoNext,
   offlineFetchVideoStatus,
   offlineDownloadBuilder2Zip
 } from '../utils/builder2OfflinePlaceholders.js'
+
+function builder2OfflineTestArmedOnlineResponse() {
+  return {
+    ok: false,
+    error: 'offline_test_armed_online',
+    message: BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+  }
+}
 
 // Get backend URL from environment variables
 // Support both Vite (import.meta.env) and CRA (process.env)
@@ -351,6 +361,9 @@ async function generate(payload) {
  * POST /api/generate-video — starts async video job; returns immediately with jobId (Builder2).
  */
 async function generateVideo({ productName, productDescription, targetVideoCount, signal } = {}) {
+  if (isBuilder2OfflineTestArmedWhileOnline()) {
+    return builder2OfflineTestArmedOnlineResponse()
+  }
   if (isBuilder2OfflinePlaceholderModeActive()) {
     return offlineGenerateVideo({ productName, productDescription, targetVideoCount })
   }
@@ -394,6 +407,9 @@ async function generateVideo({ productName, productDescription, targetVideoCount
  * POST /api/generate-video-next — starts Video #2 from existing allowance (Builder2).
  */
 async function generateVideoNext({ videoAllowanceId, signal } = {}) {
+  if (isBuilder2OfflineTestArmedWhileOnline()) {
+    return builder2OfflineTestArmedOnlineResponse()
+  }
   if (isBuilder2OfflinePlaceholderModeActive()) {
     return offlineGenerateVideoNext({ videoAllowanceId })
   }

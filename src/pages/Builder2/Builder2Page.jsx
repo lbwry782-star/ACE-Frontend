@@ -20,9 +20,12 @@ import {
 import {
   registerBuilder2OfflineConsoleHelpers,
   resolveBuilder2OfflineTargetVideoCount,
-  logBuilder2OfflineTestMountState,
+  readBuilder2OfflineArmedTargetVideoCount,
+  syncBuilder2OfflineTestConsoleState,
   isBuilder2OfflinePlaceholderModeActive,
-  readBuilder2OfflinePlaceholderFlag
+  isBuilder2OfflineTestArmedWhileOnline,
+  BUILDER2_OFFLINE_TEST_STATE_EVENT,
+  BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
 } from '../../utils/builder2OfflinePlaceholders'
 import {
   readBuilder2CurrentJob,
@@ -173,27 +176,6 @@ function Builder2Page() {
   const hadConfirmedRunningRef = useRef(false)
   const showProgressBarRef = useRef(false)
 
-  useEffect(() => {
-    clearBuilder2FormDraft()
-    registerBuilder2OfflineConsoleHelpers()
-    logBuilder2OfflineTestMountState()
-    const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
-    if (offlineTarget === 1 || offlineTarget === 2) {
-      initialTargetVideoCountRef.current = offlineTarget
-    } else {
-      const pendingFlag = readBuilder2OfflinePlaceholderFlag()
-      if (pendingFlag === 1 || pendingFlag === 2) {
-        initialTargetVideoCountRef.current = pendingFlag
-      } else {
-        const resolved = resolveBuilder2CheckoutTargetVideoCount({
-          hash: window.location.hash,
-          search: window.location.search
-        })
-        initialTargetVideoCountRef.current = resolved.targetVideoCount
-      }
-    }
-  }, [])
-
   const resetFreshFormFields = useCallback(() => {
     clearBuilder2FormDraft()
     lockedResolvedNameRef.current = null
@@ -282,6 +264,85 @@ function Builder2Page() {
     pollAbortRef.current?.abort()
     pollGenerationRef.current += 1
   }, [])
+
+  const clearOfflinePlaceholderUi = useCallback(() => {
+    stopPolling()
+    activeJobIdRef.current = null
+    progressActiveJobIdRef.current = null
+    progressJobStartMsRef.current = null
+    pendingVideoResultRef.current = null
+    submitInFlightRef.current = false
+    generateNextInFlightRef.current = false
+    allowanceLockedRef.current = false
+    setCompletedVideos([])
+    setAllowanceState(null)
+    setVideoResult(null)
+    setFailureInfo(null)
+    setOwnershipError(null)
+    setErrorMessage(null)
+    setState(STATE.IDLE)
+    stopProgressUi()
+    setProgressTiming(null)
+    clearBuilder2CurrentJob()
+    clearBuilder2ActiveJob()
+  }, [stopPolling, stopProgressUi])
+
+  const syncOfflineTestRuntime = useCallback(
+    (eventDetail = null) => {
+      if (eventDetail?.cleared) {
+        clearOfflinePlaceholderUi()
+        return
+      }
+
+      const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
+      if (armedTarget === 1 || armedTarget === 2) {
+        initialTargetVideoCountRef.current = armedTarget
+      }
+
+      syncBuilder2OfflineTestConsoleState()
+
+      if (isBuilder2OfflinePlaceholderModeActive()) {
+        setErrorMessage(null)
+        setErrorPanelTitle('Generation failed')
+      }
+    },
+    [clearOfflinePlaceholderUi]
+  )
+
+  useEffect(() => {
+    clearBuilder2FormDraft()
+    registerBuilder2OfflineConsoleHelpers()
+
+    const armedOnMount = readBuilder2OfflineArmedTargetVideoCount()
+    if (armedOnMount === 1 || armedOnMount === 2) {
+      initialTargetVideoCountRef.current = armedOnMount
+    } else {
+      const resolved = resolveBuilder2CheckoutTargetVideoCount({
+        hash: window.location.hash,
+        search: window.location.search
+      })
+      initialTargetVideoCountRef.current = resolved.targetVideoCount
+    }
+
+    syncOfflineTestRuntime()
+
+    const onTestStateChange = (event) => {
+      syncOfflineTestRuntime(event?.detail ?? null)
+    }
+    const onConnectivityChange = () => {
+      syncOfflineTestRuntime()
+    }
+
+    window.addEventListener(BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+    window.addEventListener('offline', onConnectivityChange)
+    window.addEventListener('online', onConnectivityChange)
+
+    return () => {
+      window.removeEventListener(BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+      window.removeEventListener('offline', onConnectivityChange)
+      window.removeEventListener('online', onConnectivityChange)
+    }
+  }, [syncOfflineTestRuntime])
 
   const resetFreshGenerationUi = useCallback(() => {
     stopPolling()
@@ -719,11 +780,9 @@ function Builder2Page() {
       return
     }
 
-    if (readBuilder2OfflinePlaceholderFlag() != null && !isBuilder2OfflinePlaceholderModeActive()) {
+    if (isBuilder2OfflineTestArmedWhileOnline()) {
       setErrorPanelTitle('Offline test not active')
-      setErrorMessage(
-        'Builder2 offline test: switch DevTools Network to Offline, reload Builder2, then click GENERATE.'
-      )
+      setErrorMessage(BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
       return
     }
 
@@ -759,9 +818,10 @@ function Builder2Page() {
         })
       } else {
         const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
+        const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
         const targetVideoCount = allowanceLockedRef.current
           ? allowanceState?.targetVideoCount ?? initialTargetVideoCountRef.current ?? 1
-          : offlineTarget ?? initialTargetVideoCountRef.current ?? 1
+          : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
         start = await generateVideo({
           productName: data.productName,
           productDescription: data.productDescription,
