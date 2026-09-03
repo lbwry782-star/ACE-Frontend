@@ -19,7 +19,10 @@ import {
 } from '../../utils/builder2Allowance'
 import {
   registerBuilder2OfflineConsoleHelpers,
-  resolveBuilder2OfflineTargetVideoCount
+  resolveBuilder2OfflineTargetVideoCount,
+  logBuilder2OfflineTestMountState,
+  isBuilder2OfflinePlaceholderModeActive,
+  readBuilder2OfflinePlaceholderFlag
 } from '../../utils/builder2OfflinePlaceholders'
 import {
   readBuilder2CurrentJob,
@@ -173,15 +176,21 @@ function Builder2Page() {
   useEffect(() => {
     clearBuilder2FormDraft()
     registerBuilder2OfflineConsoleHelpers()
+    logBuilder2OfflineTestMountState()
     const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
     if (offlineTarget === 1 || offlineTarget === 2) {
       initialTargetVideoCountRef.current = offlineTarget
     } else {
-      const resolved = resolveBuilder2CheckoutTargetVideoCount({
-        hash: window.location.hash,
-        search: window.location.search
-      })
-      initialTargetVideoCountRef.current = resolved.targetVideoCount
+      const pendingFlag = readBuilder2OfflinePlaceholderFlag()
+      if (pendingFlag === 1 || pendingFlag === 2) {
+        initialTargetVideoCountRef.current = pendingFlag
+      } else {
+        const resolved = resolveBuilder2CheckoutTargetVideoCount({
+          hash: window.location.hash,
+          search: window.location.search
+        })
+        initialTargetVideoCountRef.current = resolved.targetVideoCount
+      }
     }
   }, [])
 
@@ -710,6 +719,14 @@ function Builder2Page() {
       return
     }
 
+    if (readBuilder2OfflinePlaceholderFlag() != null && !isBuilder2OfflinePlaceholderModeActive()) {
+      setErrorPanelTitle('Offline test not active')
+      setErrorMessage(
+        'Builder2 offline test: switch DevTools Network to Offline, reload Builder2, then click GENERATE.'
+      )
+      return
+    }
+
     submitInFlightRef.current = true
     if (isGenerateNext) {
       generateNextInFlightRef.current = true
@@ -741,9 +758,10 @@ function Builder2Page() {
           videoAllowanceId: allowanceState.videoAllowanceId
         })
       } else {
+        const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
         const targetVideoCount = allowanceLockedRef.current
           ? allowanceState?.targetVideoCount ?? initialTargetVideoCountRef.current ?? 1
-          : initialTargetVideoCountRef.current ?? 1
+          : offlineTarget ?? initialTargetVideoCountRef.current ?? 1
         start = await generateVideo({
           productName: data.productName,
           productDescription: data.productDescription,

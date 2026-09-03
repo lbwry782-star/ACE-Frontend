@@ -48,11 +48,21 @@ export function isValidBuilder2VideoUrl(url) {
 }
 
 /**
+ * Local placeholder playback URLs (offline test only — blob/data, never production CDN).
+ * @param {unknown} url
+ */
+export function isBuilder2PlaceholderPlaybackUrl(url) {
+  const s = String(url ?? '').trim()
+  return /^blob:/i.test(s) || /^data:video\//i.test(s)
+}
+
+/**
  * Final URL precedence for completed Builder2 ads.
  * @param {object|null|undefined} payload
  */
 export function resolveBuilder2FinalVideoUrl(payload) {
   if (!payload || typeof payload !== 'object') return null
+  const isPlaceholder = Boolean(payload.isPlaceholder)
   const candidates = [
     payload.finalVideoWithClosureUrl,
     payload.final_video_with_closure_url,
@@ -63,6 +73,9 @@ export function resolveBuilder2FinalVideoUrl(payload) {
   ]
   for (const c of candidates) {
     if (isValidBuilder2VideoUrl(c)) {
+      return String(c).trim()
+    }
+    if (isPlaceholder && isBuilder2PlaceholderPlaybackUrl(c)) {
       return String(c).trim()
     }
   }

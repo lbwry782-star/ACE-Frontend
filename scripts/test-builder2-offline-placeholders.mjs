@@ -12,12 +12,18 @@ import {
   getBuilder2GenerateButtonLabel
 } from '../src/utils/builder2Allowance.js'
 import {
+  resolveBuilder2FinalVideoUrl,
+  isBuilder2PlaceholderPlaybackUrl
+} from '../src/utils/builder2Status.js'
+import {
   BUILDER2_OFFLINE_PLACEHOLDER_SESSION_KEY,
   BUILDER2_PLACEHOLDER_MARKETING_TEXT_1,
   BUILDER2_PLACEHOLDER_MARKETING_TEXT_2,
+  BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS,
   enableBuilder2OfflinePlaceholderMode,
   clearBuilder2OfflinePlaceholderFlag,
   isBuilder2OfflinePlaceholderModeActive,
+  isBuilder2OfflineTestFlagPendingActivation,
   resolveBuilder2OfflineTargetVideoCount,
   offlineGenerateVideo,
   offlineGenerateVideoNext,
@@ -25,6 +31,7 @@ import {
   offlineDownloadBuilder2Zip,
   assertBuilder2PlaceholderMarketingTexts,
   resetBuilder2OfflinePlaceholderRuntime,
+  readBuilder2OfflinePlaceholderFlag,
   mp4FilenameForVideoIndex,
   marketingTextForVideoIndex
 } from '../src/utils/builder2OfflinePlaceholders.js'
@@ -77,11 +84,13 @@ resetBuilder2OfflinePlaceholderRuntime()
 assert.equal(isBuilder2OfflinePlaceholderModeActive(offlineCtx(false)), false)
 
 enableBuilder2OfflinePlaceholderMode(2, session)
+assert.equal(isBuilder2OfflineTestFlagPendingActivation(), true)
 assert.equal(isBuilder2OfflinePlaceholderModeActive(offlineCtx(true)), false)
 assert.equal(resolveBuilder2OfflineTargetVideoCount(offlineCtx(true)), null)
 
 globalThis.navigator.onLine = false
 
+assert.equal(isBuilder2OfflineTestFlagPendingActivation(), false)
 assert.equal(isBuilder2OfflinePlaceholderModeActive(offlineCtx(false)), true)
 assert.equal(resolveBuilder2OfflineTargetVideoCount(offlineCtx(false)), 2)
 
@@ -107,6 +116,14 @@ fetchCalls = 0
 const first = await offlineGenerateVideo({ targetVideoCount: 2 })
 assert.equal(first.canGenerateNext, true)
 assert.equal(first.consumed, false)
+assert.equal(first.estimatedTotalSeconds, BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS)
+assert.equal(getBuilder2GenerateButtonLabel({ canGenerateNext: true }), 'GENERATE AGAIN')
+
+const firstStatus = await offlineFetchVideoStatus(first.jobId)
+assert.ok(isBuilder2PlaceholderPlaybackUrl(firstStatus.videoUrl))
+assert.ok(resolveBuilder2FinalVideoUrl(firstStatus), 'blob placeholder URL must resolve (no 95% stall)')
+assert.equal(firstStatus.isPlaceholder, true)
+
 const second = await offlineGenerateVideoNext({ videoAllowanceId: first.videoAllowanceId })
 assert.equal(second.videoIndex, 2)
 assert.equal(second.consumed, true)
@@ -117,6 +134,13 @@ assert.equal(status.generatedVideoCount, 2)
 assert.equal(status.videos.length, 2)
 assert.equal(status.videos[0].videoIndex, 1)
 assert.equal(status.videos[1].videoIndex, 2)
+assert.equal(getBuilder2GenerateButtonLabel({ consumed: true }), 'CONSUMED')
+
+const oneDone = await offlineFetchVideoStatus(first.jobId)
+const twoDone = await offlineFetchVideoStatus(second.jobId)
+assert.ok(resolveBuilder2FinalVideoUrl(oneDone))
+assert.ok(resolveBuilder2FinalVideoUrl(twoDone))
+assert.notEqual(oneDone.placeholderLabel, twoDone.placeholderLabel)
 
 const zip1 = await offlineDownloadBuilder2Zip({ jobId: first.jobId })
 const zip1Archive = await JSZip.loadAsync(zip1.blob)
@@ -145,7 +169,14 @@ await downloadBuilder2Zip({ jobId: gen.jobId })
 assert.equal(fetchCalls, 0)
 
 assert.match(apiSource, /isBuilder2OfflinePlaceholderModeActive/)
-assert.match(builder2PageSource, /registerBuilder2OfflineConsoleHelpers/)
+assert.match(builder2PageSource, /logBuilder2OfflineTestMountState/)
+assert.match(builder2PageSource, /isBuilder2OfflinePlaceholderModeActive/)
+assert.match(builder2PageSource, /readBuilder2OfflinePlaceholderFlag/)
+assert.match(offlineSource, /BUILDER2_OFFLINE_TEST_RELOAD_HINT/)
+assert.match(offlineSource, /Reload Builder2/)
+assert.match(offlineSource, /logBuilder2OfflineTestMountState/)
+assert.match(offlineSource, /ACTIVE targetVideoCount=/)
+assert.match(offlineSource, /INACTIVE until Network=Offline/)
 assert.match(offlineSource, /window\.__builder2OfflineOneVideo/)
 assert.match(offlineSource, /window\.__builder2OfflineTwoVideos/)
 assert.match(offlineSource, /window\.__resetBuilder2OfflineTest/)
@@ -153,6 +184,8 @@ assert.equal(BUILDER2_OFFLINE_PLACEHOLDER_SESSION_KEY, 'ace.builder2.offlinePlac
 
 clearBuilder2OfflinePlaceholderFlag(session)
 resetBuilder2OfflinePlaceholderRuntime()
+assert.equal(readBuilder2OfflinePlaceholderFlag(session), null)
+assert.equal(isBuilder2OfflinePlaceholderModeActive(offlineCtx(false)), false)
 globalThis.fetch = originalFetch
 
 console.log('test-builder2-offline-placeholders.mjs: passed')

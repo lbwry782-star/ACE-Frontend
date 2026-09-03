@@ -17,7 +17,11 @@ export const BUILDER2_PLACEHOLDER_MARKETING_TEXT_1 =
 export const BUILDER2_PLACEHOLDER_MARKETING_TEXT_2 =
   'Placeholder marketing text number two for Builder2 offline testing only hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform'
 
-export const BUILDER2_OFFLINE_PROGRESS_MS = 400
+/** Simulated generation delay before synthetic DONE (UI test only). */
+export const BUILDER2_OFFLINE_PROGRESS_MS = 1500
+
+/** Short progress estimate while offline placeholder job runs (not 30-minute production). */
+export const BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS = 3
 
 /** Minimal valid MP4 bytes (ftyp + empty mdat) — no network fetch. */
 const MINIMAL_MP4_BYTES = new Uint8Array([
@@ -144,6 +148,23 @@ function buildOfflineVideosArray() {
   return entries.sort((a, b) => a.videoIndex - b.videoIndex)
 }
 
+function buildOfflineProgressFields(job) {
+  const startedAt = Number(job?.startedAt) || Date.now()
+  const elapsedRaw = Math.max(0, (Date.now() - startedAt) / 1000)
+  const isDone = job?.status === 'done'
+  const elapsedSeconds = isDone
+    ? BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS
+    : Math.min(BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS - 0.05, elapsedRaw)
+  return {
+    estimatedTotalSeconds: BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS,
+    estimated_total_seconds: BUILDER2_OFFLINE_ESTIMATED_TOTAL_SECONDS,
+    elapsedSeconds,
+    elapsed_seconds: elapsedSeconds,
+    progressStage: isDone ? 'done' : 'runway_waiting',
+    progress_stage: isDone ? 'done' : 'runway_waiting'
+  }
+}
+
 function buildOfflineAllowanceStatus(job) {
   const videos = buildOfflineVideosArray()
   const generatedVideoCount = videos.length
@@ -171,7 +192,8 @@ function buildOfflineAllowanceStatus(job) {
     marketingText: job?.marketingText,
     completed: job?.status === 'done',
     isPlaceholder: true,
-    placeholderLabel: job?.placeholderLabel
+    placeholderLabel: job?.placeholderLabel,
+    ...buildOfflineProgressFields(job)
   }
 }
 
@@ -310,6 +332,35 @@ export async function offlineDownloadBuilder2Zip(params = {}) {
   return { blob, filename: `builder2-placeholder-video-${videoIndex}.zip` }
 }
 
+const BUILDER2_OFFLINE_TEST_RELOAD_HINT =
+  'Steps: 1) DevTools Network → Offline  2) Reload Builder2  3) Fill form  4) GENERATE'
+
+/**
+ * Log mount-time offline test state (console only).
+ */
+export function logBuilder2OfflineTestMountState() {
+  if (typeof console === 'undefined' || !console.info) return
+  const flag = readBuilder2OfflinePlaceholderFlag()
+  if (flag == null) return
+  const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+  if (!online) {
+    console.info(`[Builder2 offline test] ACTIVE targetVideoCount=${flag} network=offline`)
+    return
+  }
+  console.info(
+    `[Builder2 offline test] flag present but INACTIVE until Network=Offline + reload Builder2 (targetVideoCount=${flag})`
+  )
+}
+
+/**
+ * @returns {boolean}
+ */
+export function isBuilder2OfflineTestFlagPendingActivation() {
+  const flag = readBuilder2OfflinePlaceholderFlag()
+  if (flag == null) return false
+  return !isBuilder2OfflinePlaceholderModeActive()
+}
+
 /**
  * Register DevTools console helpers (safe — only set session flag, no auto-fake).
  */
@@ -318,15 +369,11 @@ export function registerBuilder2OfflineConsoleHelpers() {
 
   window.__builder2OfflineOneVideo = () => {
     enableBuilder2OfflinePlaceholderMode(1)
-    console.info(
-      '[Builder2 offline test] 1-video flag set. Switch DevTools Network to Offline, then open /builder2.'
-    )
+    console.info(`[Builder2 offline test] 1-video flag set. ${BUILDER2_OFFLINE_TEST_RELOAD_HINT}`)
   }
   window.__builder2OfflineTwoVideos = () => {
     enableBuilder2OfflinePlaceholderMode(2)
-    console.info(
-      '[Builder2 offline test] 2-video flag set. Switch DevTools Network to Offline, then open /builder2.'
-    )
+    console.info(`[Builder2 offline test] 2-video flag set. ${BUILDER2_OFFLINE_TEST_RELOAD_HINT}`)
   }
   window.__resetBuilder2OfflineTest = () => {
     clearBuilder2OfflinePlaceholderFlag()
