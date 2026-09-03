@@ -27,14 +27,21 @@ import {
 import { isBuilder1CampaignAuthoritativelyReady } from '../src/utils/builder1Status.js'
 import {
   BUILDER1_OFFLINE_PLACEHOLDER_PROGRESS_MS,
+  BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS,
   isBuilder1OfflinePlaceholderTransportActive,
   resetBuilder1OfflinePlaceholderRuntime,
   offlineBuilder1Generate,
   offlineBuilder1GenerateNext,
   offlineBuilder1FetchStatus,
   offlineBuilder1DownloadZip,
-  assertBuilder1PlaceholderMarketingTexts
+  assertBuilder1PlaceholderMarketingTexts,
+  __setBuilder1PlaceholderNodeZlibForTests,
+  createBuilder1PlaceholderPngBytes,
+  parseBuilder1PlaceholderPngDimensions,
+  assertBuilder1PlaceholderPngFullyPainted,
+  getBuilder1OfflinePlaceholderDimensions
 } from '../src/utils/builder1OfflinePlaceholders.js'
+import { deflateSync, inflateSync } from 'node:zlib'
 import {
   PREVIEW1_BUILDER1_OFFLINE_TEST_SESSION_KEY,
   PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE,
@@ -114,6 +121,22 @@ clearPreview1Builder1OfflineTest(session)
 resetBuilder1OfflinePlaceholderRuntime()
 local.map.clear()
 session.map.clear()
+
+__setBuilder1PlaceholderNodeZlibForTests({ deflateSync, inflateSync })
+
+// Placeholder image dimensions + full-frame paint (Portrait / Landscape / Square)
+for (const [format, dims] of Object.entries(BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS)) {
+  const pngBytes = createBuilder1PlaceholderPngBytes(format, 1)
+  const parsed = parseBuilder1PlaceholderPngDimensions(pngBytes)
+  assert.deepEqual(parsed, dims)
+  assertBuilder1PlaceholderPngFullyPainted(pngBytes, format, 1)
+}
+assert.notDeepEqual(
+  parseBuilder1PlaceholderPngDimensions(createBuilder1PlaceholderPngBytes('portrait', 1)),
+  parseBuilder1PlaceholderPngDimensions(createBuilder1PlaceholderPngBytes('landscape', 1))
+)
+assert.equal(getBuilder1OfflinePlaceholderDimensions('1080x1536').width, 1080)
+assert.equal(getBuilder1OfflinePlaceholderDimensions('1080x1536').height, 1536)
 
 // 1–2. Helper only arms — does not choose adCount
 assert.match(preview1TestSource, /window\.__preview1Builder1OfflineTest/)
@@ -230,6 +253,9 @@ async function runOfflineCampaignLifecycle(adCount) {
   const validatedInitial = validateInitialCampaignResponse(initialStatus.payload.result, adCount)
   assert.equal(validatedInitial.ok, true)
   assert.equal(validatedInitial.ad.index, 1)
+  const initialPng = Buffer.from(initialStatus.payload.result.ad.imageBase64, 'base64')
+  assert.deepEqual(parseBuilder1PlaceholderPngDimensions(initialPng), getBuilder1OfflinePlaceholderDimensions('portrait'))
+  assertBuilder1PlaceholderPngFullyPainted(initialPng, 'portrait', 1)
   assert.equal(validatedInitial.ad.headline, 'PLACEHOLDER AD 1')
 
   let sessionState = createCampaignSessionFromInitial(validatedInitial, adCount).session
@@ -316,6 +342,9 @@ const zipResponse = await builder1DownloadZip({
 })
 const zipBytes = Buffer.from(await zipResponse.arrayBuffer())
 const zipArchive = await JSZip.loadAsync(zipBytes)
+const zipPng = await zipArchive.file('placeholder-ad-1.png').async('nodebuffer')
+assert.deepEqual(parseBuilder1PlaceholderPngDimensions(zipPng), BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS.portrait)
+assertBuilder1PlaceholderPngFullyPainted(zipPng, 'portrait', 1)
 assert.ok(zipArchive.file('placeholder-ad-1.png'))
 assert.ok(zipArchive.file('marketing-text.txt'))
 
