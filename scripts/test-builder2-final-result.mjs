@@ -40,7 +40,10 @@ assert.equal(resolveBuilder2MarketingText(payload), longMarketingText)
 const built = buildBuilder2VideoResult(payload)
 assert.equal(built.videoUrl, 'https://cdn.example/final.mp4')
 assert.equal(built.marketingText, longMarketingText)
-assert.doesNotMatch(statusSource, /generateMarketingText/)
+assert.equal(built.headline, null)
+assert.doesNotMatch(statusSource, /Video result/)
+assert.doesNotMatch(videoAdCardSource, /Video result/)
+assert.doesNotMatch(builder2PageSource, /Video result/)
 assert.doesNotMatch(builder2PageSource, /generateMarketingText/)
 
 // B. Rendering order — video, marketing text, download button
@@ -49,8 +52,12 @@ const marketingIdx = videoAdCardSource.indexOf('ad-card-video-marketing-text')
 const downloadIdx = videoAdCardSource.indexOf('ad-card-download')
 assert.ok(videoIdx > 0 && marketingIdx > videoIdx, 'marketing text after video')
 assert.ok(downloadIdx > marketingIdx, 'download after marketing text')
+assert.match(videoAdCardSource, /\{baseHeadline \?/)
+assert.match(builder2PageSource, /completedVideos\.map/)
+assert.match(builder2PageSource, /jobId=\{video\.jobId\}/)
+assert.match(videoAdCardSource, /ad-card-download/)
 
-// C. Full text — no truncation helpers/CSS for Builder2 marketing copy
+assert.doesNotMatch(statusSource, /generateMarketingText/)
 assert.equal(built.marketingText.length, longMarketingText.length)
 assert.doesNotMatch(videoAdCardCss, /line-clamp|-webkit-line-clamp|text-overflow:\s*ellipsis/)
 assert.doesNotMatch(

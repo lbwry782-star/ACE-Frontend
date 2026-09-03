@@ -284,7 +284,10 @@ export function buildBuilder2VideoResult(payload) {
   return {
     videoUrl: videoUrl || null,
     marketingText,
-    headline: payload?.headline || 'Video result',
+    headline:
+      payload?.headline != null && String(payload.headline).trim()
+        ? String(payload.headline).trim()
+        : null,
     headlineText: payload?.headlineText ?? payload?.headline_text ?? null,
     overlayHeadline: payload?.overlayHeadline ?? payload?.overlay_headline ?? null,
     productNameResolved:
