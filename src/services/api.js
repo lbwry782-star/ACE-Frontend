@@ -1,6 +1,7 @@
 import { getBuilder2OwnerBatchStateHeader } from '../utils/builder2OwnerContext.js'
 import {
   isBuilder2OfflinePlaceholderModeActive,
+  isBuilder2OfflinePlaceholderTransportActive,
   isBuilder2OfflineTestArmedWhileOnline,
   BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE,
   offlineGenerateVideo,
@@ -8,12 +9,24 @@ import {
   offlineFetchVideoStatus,
   offlineDownloadBuilder2Zip
 } from '../utils/builder2OfflinePlaceholders.js'
+import {
+  isPreview2Builder2OfflineTestArmedWhileOnline,
+  PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+} from '../utils/preview2Builder2OfflineTest.js'
 
 function builder2OfflineTestArmedOnlineResponse() {
   return {
     ok: false,
     error: 'offline_test_armed_online',
     message: BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+  }
+}
+
+function builder2Preview2TestArmedOnlineResponse() {
+  return {
+    ok: false,
+    error: 'preview2_test_armed_online',
+    message: PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
   }
 }
 
@@ -361,10 +374,13 @@ async function generate(payload) {
  * POST /api/generate-video — starts async video job; returns immediately with jobId (Builder2).
  */
 async function generateVideo({ productName, productDescription, targetVideoCount, signal } = {}) {
+  if (isPreview2Builder2OfflineTestArmedWhileOnline()) {
+    return builder2Preview2TestArmedOnlineResponse()
+  }
   if (isBuilder2OfflineTestArmedWhileOnline()) {
     return builder2OfflineTestArmedOnlineResponse()
   }
-  if (isBuilder2OfflinePlaceholderModeActive()) {
+  if (isBuilder2OfflinePlaceholderTransportActive()) {
     return offlineGenerateVideo({ productName, productDescription, targetVideoCount })
   }
 
@@ -407,10 +423,13 @@ async function generateVideo({ productName, productDescription, targetVideoCount
  * POST /api/generate-video-next — starts Video #2 from existing allowance (Builder2).
  */
 async function generateVideoNext({ videoAllowanceId, signal } = {}) {
+  if (isPreview2Builder2OfflineTestArmedWhileOnline()) {
+    return builder2Preview2TestArmedOnlineResponse()
+  }
   if (isBuilder2OfflineTestArmedWhileOnline()) {
     return builder2OfflineTestArmedOnlineResponse()
   }
-  if (isBuilder2OfflinePlaceholderModeActive()) {
+  if (isBuilder2OfflinePlaceholderTransportActive()) {
     return offlineGenerateVideoNext({ videoAllowanceId })
   }
 
@@ -450,7 +469,7 @@ async function generateVideoNext({ videoAllowanceId, signal } = {}) {
  * GET /api/video-status?jobId=... — poll async Builder2 video job (owner context required).
  */
 async function fetchVideoStatus(jobId, { signal } = {}) {
-  if (isBuilder2OfflinePlaceholderModeActive()) {
+  if (isBuilder2OfflinePlaceholderTransportActive()) {
     return offlineFetchVideoStatus(jobId)
   }
 
@@ -584,7 +603,7 @@ async function downloadBuilder2Zip({ jobId, signal } = {}) {
     throw new Error('Missing jobId')
   }
 
-  if (isBuilder2OfflinePlaceholderModeActive()) {
+  if (isBuilder2OfflinePlaceholderTransportActive()) {
     return offlineDownloadBuilder2Zip({ jobId: trimmedJobId })
   }
 

@@ -35,6 +35,17 @@ const MINIMAL_MP4_BYTES = new Uint8Array([
   0x69, 0x73, 0x6f, 0x6d, 0x69, 0x73, 0x6f, 0x32, 0x00, 0x00, 0x00, 0x08, 0x6d, 0x64, 0x61, 0x74
 ])
 
+/** @type {((ctx?: object) => boolean) | null} */
+let preview2PlaceholderActiveCheck = null
+
+/**
+ * Register Preview2→Builder2 offline test placeholder resolver (avoids circular import at load).
+ * @param {(ctx?: object) => boolean} fn
+ */
+export function registerPreview2PlaceholderActiveCheck(fn) {
+  preview2PlaceholderActiveCheck = fn
+}
+
 /** @type {Map<string, object>} */
 const offlineJobs = new Map()
 
@@ -95,6 +106,15 @@ export function isBuilder2OfflinePlaceholderModeActive(ctx = {}) {
         ? navigator.onLine
         : true
   return !online
+}
+
+/**
+ * Legacy Builder2 offline flag OR explicit Preview2→Builder2 offline test (when registered).
+ * @param {{ sessionStorage?: Storage, navigatorOnline?: boolean, hash?: string, search?: string }} [ctx]
+ */
+export function isBuilder2OfflinePlaceholderTransportActive(ctx = {}) {
+  if (isBuilder2OfflinePlaceholderModeActive(ctx)) return true
+  return preview2PlaceholderActiveCheck?.(ctx) === true
 }
 
 /**
@@ -251,7 +271,7 @@ function buildOfflineAllowanceStatus(job) {
  * @param {{ productName?: string, productDescription?: string, targetVideoCount?: number }} params
  */
 export async function offlineGenerateVideo(params = {}) {
-  if (!isBuilder2OfflinePlaceholderModeActive()) {
+  if (!isBuilder2OfflinePlaceholderTransportActive()) {
     return { ok: false, error: 'offline_mode_inactive' }
   }
 
@@ -295,7 +315,7 @@ export async function offlineGenerateVideo(params = {}) {
  * @param {{ videoAllowanceId?: string }} params
  */
 export async function offlineGenerateVideoNext(params = {}) {
-  if (!isBuilder2OfflinePlaceholderModeActive()) {
+  if (!isBuilder2OfflinePlaceholderTransportActive()) {
     return { ok: false, error: 'offline_mode_inactive' }
   }
 
@@ -346,7 +366,7 @@ export async function offlineGenerateVideoNext(params = {}) {
  * @param {string} jobId
  */
 export async function offlineFetchVideoStatus(jobId) {
-  if (!isBuilder2OfflinePlaceholderModeActive()) {
+  if (!isBuilder2OfflinePlaceholderTransportActive()) {
     return { status: 'error', error: 'offline_mode_inactive' }
   }
 
@@ -362,7 +382,7 @@ export async function offlineFetchVideoStatus(jobId) {
  * @param {{ jobId?: string }} params
  */
 export async function offlineDownloadBuilder2Zip(params = {}) {
-  if (!isBuilder2OfflinePlaceholderModeActive()) {
+  if (!isBuilder2OfflinePlaceholderTransportActive()) {
     throw new Error('offline_mode_inactive')
   }
 

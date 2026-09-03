@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { startBuilder2Preview2Checkout, preview2TierKeyToTargetVideoCount } from '../../utils/builder2VideoCheckout'
+import {
+  readPreview2Builder2OfflineTestArmed,
+  buildPreview2Builder2OfflineTestBuilder2Hash,
+  markBuilder2VideoCheckoutPreview2OfflineTest,
+  registerPreview2Builder2OfflineTestConsoleHelpers
+} from '../../utils/preview2Builder2OfflineTest'
 import '../Preview/preview.css'
 import './Preview2Page.css'
 
@@ -61,6 +67,7 @@ function Preview2Page() {
   const navigateTimeoutRef = useRef(null)
 
   useEffect(() => {
+    registerPreview2Builder2OfflineTestConsoleHelpers()
     return () => {
       if (navigateTimeoutRef.current) clearTimeout(navigateTimeoutRef.current)
     }
@@ -80,7 +87,12 @@ function Preview2Page() {
   const goToPayment = (assetKey) => {
     const targetVideoCount = preview2TierKeyToTargetVideoCount(assetKey)
     if (targetVideoCount == null) return
-    startBuilder2Preview2Checkout(targetVideoCount)
+    const checkout = startBuilder2Preview2Checkout(targetVideoCount)
+    if (readPreview2Builder2OfflineTestArmed()) {
+      markBuilder2VideoCheckoutPreview2OfflineTest(checkout.checkoutId)
+      window.location.hash = buildPreview2Builder2OfflineTestBuilder2Hash(checkout.checkoutId)
+      return
+    }
     const url = PREVIEW2_PAYMENT_URLS[assetKey]
     if (url) window.location.href = url
   }

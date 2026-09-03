@@ -28,6 +28,15 @@ import {
   BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
 } from '../../utils/builder2OfflinePlaceholders'
 import {
+  registerPreview2Builder2OfflineTestConsoleHelpers,
+  resolvePreview2Builder2OfflineTestCheckout,
+  syncPreview2Builder2OfflineTestConsoleState,
+  isPreview2Builder2OfflineTestArmedWhileOnline,
+  isPreview2Builder2OfflinePlaceholderActive,
+  PREVIEW2_BUILDER2_OFFLINE_TEST_STATE_EVENT,
+  PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+} from '../../utils/preview2Builder2OfflineTest'
+import {
   readBuilder2CurrentJob,
   writeBuilder2CurrentJob,
   clearBuilder2CurrentJob,
@@ -294,14 +303,26 @@ function Builder2Page() {
         return
       }
 
-      const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
-      if (armedTarget === 1 || armedTarget === 2) {
-        initialTargetVideoCountRef.current = armedTarget
+      const routeCtx = {
+        hash: typeof window !== 'undefined' ? window.location.hash : '',
+        search: typeof window !== 'undefined' ? window.location.search : ''
+      }
+      const preview2Checkout = resolvePreview2Builder2OfflineTestCheckout(routeCtx)
+      if (preview2Checkout.valid) {
+        initialTargetVideoCountRef.current = preview2Checkout.targetVideoCount
+        syncPreview2Builder2OfflineTestConsoleState(routeCtx)
+      } else {
+        const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
+        if (armedTarget === 1 || armedTarget === 2) {
+          initialTargetVideoCountRef.current = armedTarget
+        }
+        syncBuilder2OfflineTestConsoleState()
       }
 
-      syncBuilder2OfflineTestConsoleState()
-
-      if (isBuilder2OfflinePlaceholderModeActive()) {
+      if (
+        isBuilder2OfflinePlaceholderModeActive() ||
+        isPreview2Builder2OfflinePlaceholderActive(routeCtx)
+      ) {
         setErrorMessage(null)
         setErrorPanelTitle('Generation failed')
       }
@@ -312,16 +333,24 @@ function Builder2Page() {
   useEffect(() => {
     clearBuilder2FormDraft()
     registerBuilder2OfflineConsoleHelpers()
+    registerPreview2Builder2OfflineTestConsoleHelpers()
 
-    const armedOnMount = readBuilder2OfflineArmedTargetVideoCount()
-    if (armedOnMount === 1 || armedOnMount === 2) {
-      initialTargetVideoCountRef.current = armedOnMount
+    const routeCtx = {
+      hash: window.location.hash,
+      search: window.location.search
+    }
+    const preview2Checkout = resolvePreview2Builder2OfflineTestCheckout(routeCtx)
+    if (preview2Checkout.valid) {
+      initialTargetVideoCountRef.current = preview2Checkout.targetVideoCount
+      syncPreview2Builder2OfflineTestConsoleState(routeCtx)
     } else {
-      const resolved = resolveBuilder2CheckoutTargetVideoCount({
-        hash: window.location.hash,
-        search: window.location.search
-      })
-      initialTargetVideoCountRef.current = resolved.targetVideoCount
+      const armedOnMount = readBuilder2OfflineArmedTargetVideoCount()
+      if (armedOnMount === 1 || armedOnMount === 2) {
+        initialTargetVideoCountRef.current = armedOnMount
+      } else {
+        const resolved = resolveBuilder2CheckoutTargetVideoCount(routeCtx)
+        initialTargetVideoCountRef.current = resolved.targetVideoCount
+      }
     }
 
     syncOfflineTestRuntime()
@@ -334,11 +363,13 @@ function Builder2Page() {
     }
 
     window.addEventListener(BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+    window.addEventListener(PREVIEW2_BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
     window.addEventListener('offline', onConnectivityChange)
     window.addEventListener('online', onConnectivityChange)
 
     return () => {
       window.removeEventListener(BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+      window.removeEventListener(PREVIEW2_BUILDER2_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
       window.removeEventListener('offline', onConnectivityChange)
       window.removeEventListener('online', onConnectivityChange)
     }
@@ -780,6 +811,12 @@ function Builder2Page() {
       return
     }
 
+    if (isPreview2Builder2OfflineTestArmedWhileOnline()) {
+      setErrorPanelTitle('Preview2 test not active')
+      setErrorMessage(PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
+      return
+    }
+
     if (isBuilder2OfflineTestArmedWhileOnline()) {
       setErrorPanelTitle('Offline test not active')
       setErrorMessage(BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
@@ -817,11 +854,18 @@ function Builder2Page() {
           videoAllowanceId: allowanceState.videoAllowanceId
         })
       } else {
+        const routeCtx = {
+          hash: window.location.hash,
+          search: window.location.search
+        }
+        const preview2Checkout = resolvePreview2Builder2OfflineTestCheckout(routeCtx)
         const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
         const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
         const targetVideoCount = allowanceLockedRef.current
           ? allowanceState?.targetVideoCount ?? initialTargetVideoCountRef.current ?? 1
-          : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
+          : preview2Checkout.valid
+            ? preview2Checkout.targetVideoCount
+            : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
         start = await generateVideo({
           productName: data.productName,
           productDescription: data.productDescription,
