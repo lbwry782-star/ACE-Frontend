@@ -98,6 +98,15 @@ import {
   readBuilder1CheckoutIdFromRoute
 } from '../../utils/builder1Checkout.js'
 import {
+  registerPreview1Builder1OfflineTestConsoleHelpers,
+  resolvePreview1Builder1OfflineTestCheckout,
+  syncPreview1Builder1OfflineTestConsoleState,
+  isPreview1Builder1OfflineTestArmedWhileOnline,
+  isPreview1Builder1OfflinePlaceholderActive,
+  PREVIEW1_BUILDER1_OFFLINE_TEST_STATE_EVENT,
+  PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+} from '../../utils/preview1Builder1OfflineTest.js'
+import {
   BUILDER1_INITIAL_ESTIMATED_DURATION_MS,
   BUILDER1_NEXT_AD_ESTIMATED_DURATION_MS,
   BUILDER1_PROGRESS_OPERATION,
@@ -332,9 +341,67 @@ function BuilderPage() {
       hash: window.location.hash
     })
     activeCheckoutIdRef.current = resolved.checkoutId
-    setTargetAdCount(resolved.adCount)
+    const preview1Checkout = resolvePreview1Builder1OfflineTestCheckout({
+      hash: window.location.hash,
+      search: location.search,
+      checkoutId: resolved.checkoutId
+    })
+    const nextAdCount = preview1Checkout.valid ? preview1Checkout.adCount : resolved.adCount
+    setTargetAdCount(nextAdCount)
     if (lockedTargetAdCountRef.current == null) {
-      lockedTargetAdCountRef.current = resolved.adCount
+      lockedTargetAdCountRef.current = nextAdCount
+    }
+    if (preview1Checkout.valid) {
+      syncPreview1Builder1OfflineTestConsoleState({
+        hash: window.location.hash,
+        search: location.search,
+        checkoutId: preview1Checkout.checkoutId
+      })
+    }
+  }, [location.search])
+
+  useEffect(() => {
+    registerPreview1Builder1OfflineTestConsoleHelpers()
+
+    const routeCtx = () => ({
+      hash: window.location.hash,
+      search: location.search
+    })
+
+    const syncPreview1TestRuntime = (eventDetail = null) => {
+      if (eventDetail?.cleared) {
+        setError(null)
+        return
+      }
+      const ctx = routeCtx()
+      const preview1Checkout = resolvePreview1Builder1OfflineTestCheckout(ctx)
+      if (preview1Checkout.valid) {
+        lockedTargetAdCountRef.current = preview1Checkout.adCount
+        setTargetAdCount(preview1Checkout.adCount)
+        syncPreview1Builder1OfflineTestConsoleState(ctx)
+      }
+      if (isPreview1Builder1OfflinePlaceholderActive(ctx)) {
+        setError(null)
+      }
+    }
+
+    syncPreview1TestRuntime()
+
+    const onTestStateChange = (event) => {
+      syncPreview1TestRuntime(event?.detail ?? null)
+    }
+    const onConnectivityChange = () => {
+      syncPreview1TestRuntime()
+    }
+
+    window.addEventListener(PREVIEW1_BUILDER1_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+    window.addEventListener('offline', onConnectivityChange)
+    window.addEventListener('online', onConnectivityChange)
+
+    return () => {
+      window.removeEventListener(PREVIEW1_BUILDER1_OFFLINE_TEST_STATE_EVENT, onTestStateChange)
+      window.removeEventListener('offline', onConnectivityChange)
+      window.removeEventListener('online', onConnectivityChange)
     }
   }, [location.search])
 
@@ -1174,6 +1241,16 @@ function BuilderPage() {
     if (readBuilder1ActiveJob()) return
     if (readBuilder1PendingMutation()) return
 
+    const preview1RouteCtx = {
+      hash: window.location.hash,
+      search: location.search
+    }
+    if (isPreview1Builder1OfflineTestArmedWhileOnline(preview1RouteCtx)) {
+      setError(PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
+      setState(STATE.IDLE)
+      return
+    }
+
     if (!BUILDER1_ACCESS_GUARD_DISABLED && !securityConfigLoaded) return
     if (
       !BUILDER1_ACCESS_GUARD_DISABLED &&
@@ -1491,6 +1568,16 @@ function BuilderPage() {
     if (cancellationGate !== 'ready' || initPhase !== 'done') return
     if (readBuilder1ActiveJob()) return
     if (readBuilder1PendingMutation()) return
+
+    const preview1RouteCtx = {
+      hash: window.location.hash,
+      search: location.search
+    }
+    if (isPreview1Builder1OfflineTestArmedWhileOnline(preview1RouteCtx)) {
+      setError(PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
+      setState(STATE.SUCCESS)
+      return
+    }
 
     const activeSession = campaignSession
     const activeRetryContext = builder1RetryContext

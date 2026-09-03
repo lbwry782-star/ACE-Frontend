@@ -5,6 +5,17 @@
 import { API_BASE_URL, NetworkError } from './api.js'
 import { getBuilder1OwnerBatchStateHeader, ensureBuilder1OwnerContext } from '../utils/builder1OwnerContext.js'
 import {
+  isBuilder1OfflinePlaceholderTransportActive,
+  offlineBuilder1Generate,
+  offlineBuilder1GenerateNext,
+  offlineBuilder1FetchStatus,
+  offlineBuilder1DownloadZip
+} from '../utils/builder1OfflinePlaceholders.js'
+import {
+  isPreview1Builder1OfflineTestArmedWhileOnline,
+  PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+} from '../utils/preview1Builder1OfflineTest.js'
+import {
   getBuilder1OwnershipErrorCode,
   isTransientBuilder1PollFailure,
   isBuilder1IdempotencyConflict
@@ -15,6 +26,26 @@ export const BUILDER1_POLL_INTERVAL_MS = 2000
 export const BUILDER1_POLL_TIMEOUT_MS = 15 * 60 * 1000
 export const BUILDER1_MUTATION_RETRY_MAX_ATTEMPTS = 4
 export const BUILDER1_MUTATION_RETRY_BASE_MS = 1500
+
+function builder1Preview1TestArmedOnlineResponse() {
+  return {
+    response: { ok: false, status: 503 },
+    payload: {
+      ok: false,
+      error: 'preview1_test_armed_online',
+      message: PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+    }
+  }
+}
+
+function builder1Preview1TestArmedOnlineErrorResponse() {
+  return {
+    ok: false,
+    status: 'error',
+    error: 'preview1_test_armed_online',
+    message: PREVIEW1_BUILDER1_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
+  }
+}
 
 /**
  * Optional Authorization from existing app session (sid) — no new auth system.
@@ -184,6 +215,12 @@ function BUILDER1_OWNERSHIP_MESSAGE(payload) {
 }
 
 export async function builder1Generate(body, { signal, requestId } = {}) {
+  if (isPreview1Builder1OfflineTestArmedWhileOnline()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return offlineBuilder1Generate(body)
+  }
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('builder1Generate requires valid requestId')
   }
@@ -203,6 +240,12 @@ export async function builder1Generate(body, { signal, requestId } = {}) {
 }
 
 export async function builder1GenerateNext(body, { signal, requestId } = {}) {
+  if (isPreview1Builder1OfflineTestArmedWhileOnline()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return offlineBuilder1GenerateNext(body)
+  }
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('builder1GenerateNext requires valid requestId')
   }
@@ -222,6 +265,12 @@ export async function builder1GenerateNext(body, { signal, requestId } = {}) {
 }
 
 export async function builder1RetryImage(body, { signal, requestId } = {}) {
+  if (isPreview1Builder1OfflineTestArmedWhileOnline()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('builder1RetryImage requires valid requestId')
   }
@@ -241,6 +290,12 @@ export async function builder1RetryImage(body, { signal, requestId } = {}) {
 }
 
 export async function resumeBuilder1Planning(jobId, { signal, requestId } = {}) {
+  if (isPreview1Builder1OfflineTestArmedWhileOnline()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('resumeBuilder1Planning requires valid requestId')
   }
@@ -265,6 +320,12 @@ export async function resumeBuilder1Planning(jobId, { signal, requestId } = {}) 
 }
 
 export async function builder1RepairPhysical(body, { signal, requestId } = {}) {
+  if (isPreview1Builder1OfflineTestArmedWhileOnline()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return builder1Preview1TestArmedOnlineResponse()
+  }
   if (!isValidBuilder1RequestId(requestId)) {
     throw new Error('builder1RepairPhysical requires valid requestId')
   }
@@ -311,6 +372,9 @@ export async function replayBuilder1PendingMutation(pending, { signal } = {}) {
 }
 
 export async function builder1FetchStatus(jobId, { signal } = {}) {
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return offlineBuilder1FetchStatus(jobId)
+  }
   const params = new URLSearchParams({ jobId: String(jobId) })
   try {
     const { response, payload } = await builder1JsonFetch(
@@ -326,6 +390,9 @@ export async function builder1FetchStatus(jobId, { signal } = {}) {
 }
 
 export async function cancelBuilder1Job(jobId, { signal, reason = 'frontend_refresh' } = {}) {
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return builder1Preview1TestArmedOnlineErrorResponse()
+  }
   const trimmed = String(jobId ?? '').trim()
   if (!trimmed) {
     return { ok: false, status: 'error', error: 'Missing jobId' }
@@ -384,6 +451,9 @@ export function cancelBuilder1JobKeepalive(jobId, { reason = 'frontend_refresh' 
 }
 
 export async function builder1DownloadZip(body, { signal, acceptZip = true } = {}) {
+  if (isBuilder1OfflinePlaceholderTransportActive()) {
+    return offlineBuilder1DownloadZip(body)
+  }
   try {
     const headers = buildBuilder1RequestHeaders({
       'Content-Type': 'application/json',
