@@ -22,7 +22,9 @@ import {
   validateInitialCampaignResponse,
   validateNextAdResponse,
   createCampaignSessionFromInitial,
-  appendAdToSession
+  appendAdToSession,
+  getFormatRatioCss,
+  BUILDER1_FORMAT_DIMENSIONS
 } from '../src/utils/builder1Campaign.js'
 import { isBuilder1CampaignAuthoritativelyReady } from '../src/utils/builder1Status.js'
 import {
@@ -137,6 +139,11 @@ assert.notDeepEqual(
 )
 assert.equal(getBuilder1OfflinePlaceholderDimensions('1080x1536').width, 1080)
 assert.equal(getBuilder1OfflinePlaceholderDimensions('1080x1536').height, 1536)
+for (const [format, dims] of Object.entries(BUILDER1_FORMAT_DIMENSIONS)) {
+  assert.equal(getFormatRatioCss(format), `${dims.width} / ${dims.height}`)
+  assert.deepEqual(getBuilder1OfflinePlaceholderDimensions(format), dims)
+}
+assert.doesNotMatch(getFormatRatioCss('portrait'), /1024/)
 
 // 1–2. Helper only arms — does not choose adCount
 assert.match(preview1TestSource, /window\.__preview1Builder1OfflineTest/)

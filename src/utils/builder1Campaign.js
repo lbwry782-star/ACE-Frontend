@@ -32,6 +32,13 @@ export {
 } from './builder1CampaignCount.js'
 
 export const BUILDER1_SUPPORTED_FORMATS = new Set(['portrait', 'landscape', 'square'])
+
+/** Canonical Builder1 production canvas sizes (matches ProductForm labels). */
+export const BUILDER1_FORMAT_DIMENSIONS = Object.freeze({
+  portrait: { width: 1080, height: 1536 },
+  landscape: { width: 1536, height: 1080 },
+  square: { width: 1080, height: 1080 }
+})
 export const BUILDER1_SUPPORTED_LANGUAGES = new Set(['he', 'en'])
 export const BUILDER1_PRODUCT_NAME_GENERATION_FAILED = 'product_name_generation_failed'
 export const BUILDER1_MISSING_PRODUCT_DESCRIPTION = 'missing_product_description'
@@ -556,12 +563,15 @@ export function toBuilder1ImageSrc(value) {
 }
 
 /** @param {string} format */
+export function getBuilder1FormatDimensions(format) {
+  const normalized = normalizeBuilder1FormatForApi(format) || 'portrait'
+  return BUILDER1_FORMAT_DIMENSIONS[normalized] ?? BUILDER1_FORMAT_DIMENSIONS.portrait
+}
+
+/** @param {string} format */
 export function getFormatRatioCss(format) {
-  const f = String(format || '').trim().toLowerCase()
-  if (f === 'portrait') return '1024 / 1536'
-  if (f === 'square') return '1 / 1'
-  if (f === 'landscape') return '1536 / 1024'
-  return '1024 / 1536'
+  const { width, height } = getBuilder1FormatDimensions(format)
+  return `${width} / ${height}`
 }
 
 /** @param {unknown} raw */

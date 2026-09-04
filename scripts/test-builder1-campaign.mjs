@@ -20,6 +20,8 @@ import {
   createCampaignSessionFromInitial,
   appendAdToSession,
   getFormatRatioCss,
+  getBuilder1FormatDimensions,
+  BUILDER1_FORMAT_DIMENSIONS,
   toBuilder1ApiImageBase64,
   buildSingleAdZipRequest,
   sanitizeSingleAdZipFilename,
@@ -258,6 +260,7 @@ assert.doesNotMatch(builderPageSource, /הורד ZIP קמפיין/)
 // 13–18. AdCard layout
 const adCardSource = readFileSync(join(root, 'src/components/AdCard/AdCard.jsx'), 'utf8')
 const adCardCss = readFileSync(join(root, 'src/components/AdCard/adcard.css'), 'utf8')
+const builder1CampaignSource = readFileSync(join(root, 'src/utils/builder1Campaign.js'), 'utf8')
 assert.match(adCardSource, /builder1-ad-canvas/)
 assert.match(adCardSource, /builder1-marketing-text/)
 assert.match(adCardSource, /builder1-ad-actions/)
@@ -267,7 +270,20 @@ assert.doesNotMatch(adCardSource, /headline-overlay/)
 assert.match(adCardCss, /\.builder1-marketing-text[\s\S]*margin-top: 16px/)
 assert.doesNotMatch(adCardCss, /\.builder1-marketing-text[\s\S]*position:\s*absolute/)
 assert.doesNotMatch(adCardCss, /\.builder1-ad-actions[\s\S]*position:\s*absolute/)
-assert.equal(getFormatRatioCss('square'), '1 / 1')
+assert.equal(getFormatRatioCss('square'), '1080 / 1080')
+assert.equal(getFormatRatioCss('portrait'), '1080 / 1536')
+assert.equal(getFormatRatioCss('landscape'), '1536 / 1080')
+assert.doesNotMatch(adCardCss, /builder1-ad-canvas[\s\S]*1024 \/ 1536/)
+assert.doesNotMatch(builder1CampaignSource, /getFormatRatioCss[\s\S]*1024 \/ 1536/)
+
+for (const [format, dims] of Object.entries(BUILDER1_FORMAT_DIMENSIONS)) {
+  const ratio = getFormatRatioCss(format)
+  const placeholderDims = getBuilder1FormatDimensions(format)
+  assert.deepEqual(placeholderDims, dims)
+  assert.equal(ratio, `${dims.width} / ${dims.height}`)
+}
+assert.match(adCardCss, /\.builder1-final-ad-image[\s\S]*object-fit:\s*contain/)
+assert.doesNotMatch(adCardCss, /\.builder1-final-ad-image[\s\S]*object-fit:\s*cover/)
 
 // 19–22. Per-ad ZIP
 assert.equal(sanitizeSingleAdZipFilename(1), 'ad-01.zip')

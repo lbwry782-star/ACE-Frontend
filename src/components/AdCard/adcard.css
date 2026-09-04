@@ -777,7 +777,7 @@
   position: relative;
   width: 100%;
   max-width: 100%;
-  aspect-ratio: var(--builder1-ad-ratio, 1024 / 1536);
+  aspect-ratio: var(--builder1-ad-ratio, 1080 / 1536);
   overflow: hidden;
   box-sizing: border-box;
   margin: 0;

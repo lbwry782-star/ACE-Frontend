@@ -8,18 +8,16 @@ import { createBuilder1RequestId } from './builder1RequestId.js'
 import {
   normalizeBuilder1AdCount,
   normalizeBuilder1FormatForApi,
-  countMarketingWords
+  countMarketingWords,
+  getBuilder1FormatDimensions,
+  BUILDER1_FORMAT_DIMENSIONS
 } from './builder1Campaign.js'
 import { PREVIEW1_TIER_AD_COUNTS } from './builder1CampaignCount.js'
 
 export const BUILDER1_OFFLINE_PLACEHOLDER_PROGRESS_MS = 1500
 
-/** Production Builder1 canvas sizes (matches ProductForm options). */
-export const BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS = Object.freeze({
-  portrait: { width: 1080, height: 1536 },
-  landscape: { width: 1536, height: 1080 },
-  square: { width: 1080, height: 1080 }
-})
+/** @deprecated Use BUILDER1_FORMAT_DIMENSIONS from builder1Campaign.js */
+export const BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS = BUILDER1_FORMAT_DIMENSIONS
 
 /** Distinct full-frame test fills per ad index [R,G,B]. */
 const BUILDER1_PLACEHOLDER_FILL_RGB = Object.freeze({
@@ -88,11 +86,7 @@ export function __setBuilder1PlaceholderNodeZlibForTests(zlib) {
  * @param {unknown} format
  */
 export function getBuilder1OfflinePlaceholderDimensions(format) {
-  const normalized = normalizeBuilder1FormatForApi(format) || 'portrait'
-  return (
-    BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS[normalized] ??
-    BUILDER1_OFFLINE_PLACEHOLDER_DIMENSIONS.portrait
-  )
+  return getBuilder1FormatDimensions(format)
 }
 
 function placeholderFillRgb(adIndex) {
