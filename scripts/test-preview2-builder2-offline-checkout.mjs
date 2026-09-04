@@ -39,6 +39,7 @@ import {
   isPreview2Builder2OfflineTestRoute,
   clearPreview2OfflineTestCheckoutRecords
 } from '../src/utils/preview2Builder2OfflineTest.js'
+import { createBuilder2RequestId } from '../src/utils/builder2RequestId.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
@@ -270,7 +271,8 @@ fetchCalls = 0
 const afterReset = await generateVideo({
   productName: 'x',
   productDescription: 'y',
-  targetVideoCount: 1
+  targetVideoCount: 1,
+  requestId: createBuilder2RequestId()
 })
 assert.notEqual(afterReset.error, 'preview2_test_armed_online')
 

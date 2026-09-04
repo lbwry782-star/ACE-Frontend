@@ -93,7 +93,9 @@ assert.match(unloadEffect, /cancelBuilder2JobKeepalive/)
 assert.match(unloadEffect, /frontend_refresh/)
 assert.doesNotMatch(unloadEffect, /clearBuilder2ActiveJob/)
 
-// D. Mount fallback — cancel again after reload; already_cancelled is fine
+// D. Mount fallback — cancel again after reload; pending mutation replay first
+assert.match(mountEffect, /readBuilder2PendingMutation/)
+assert.match(mountEffect, /replayBuilder2PendingMutation/)
 assert.match(mountEffect, /readBuilder2ActiveJob/)
 assert.match(mountEffect, /cancelBuilder2Job\(jobId\)/)
 assert.match(mountEffect, /isBuilder2CancelAcknowledged\(result\)/)

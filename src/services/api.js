@@ -1,4 +1,10 @@
 import { getBuilder2OwnerBatchStateHeader } from '../utils/builder2OwnerContext.js'
+import { isValidBuilder2RequestId } from '../utils/builder2RequestId.js'
+import {
+  isBuilder2IdempotencyConflict,
+  isBuilder2IdempotencyInProgress,
+  getBuilder2OwnershipErrorCode
+} from '../utils/builder2Status.js'
 import {
   isBuilder2OfflinePlaceholderModeActive,
   isBuilder2OfflinePlaceholderTransportActive,
@@ -68,6 +74,172 @@ function buildBuilder2RequestHeaders(extra = {}) {
     'X-ACE-Batch-State': getBuilder2OwnerBatchStateHeader(),
     ...extra
   }
+}
+
+export const BUILDER2_MUTATION_RETRY_MAX_ATTEMPTS = 5
+export const BUILDER2_MUTATION_RETRY_BASE_MS = 400
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Headers for paid Builder2 initial generate (ownership + request idempotency).
+ * @param {string} requestId
+ * @param {Record<string, string>} [extra]
+ */
+export function buildBuilder2MutationHeaders(requestId, extra = {}) {
+  const trimmed = String(requestId ?? '').trim()
+  if (!isValidBuilder2RequestId(trimmed)) {
+    throw new Error('Builder2 mutation requires valid X-ACE-Request-Id')
+  }
+  return buildBuilder2RequestHeaders({
+    'X-ACE-Request-Id': trimmed,
+    ...extra
+  })
+}
+
+function throwBuilder2IdempotencyConflict(payload, response) {
+  const err = new Error('Builder2 idempotency conflict')
+  err.code = 'builder2_idempotency_conflict'
+  err.isIdempotencyConflict = true
+  err.body = payload
+  err.status = response?.status ?? 409
+  throw err
+}
+
+/**
+ * @param {object} body
+ * @param {string} requestId
+ * @param {RequestInit} [init]
+ */
+async function builder2GenerateVideoMutationFetch(body, requestId, init = {}) {
+  const headers = buildBuilder2MutationHeaders(requestId, init.headers ?? {})
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}/api/generate-video`, {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      ...init,
+      headers,
+      body: JSON.stringify(body)
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new NetworkError('Network error: Unable to connect to server')
+  }
+  const data = await response.json().catch(() => null)
+  const payload =
+    data && typeof data === 'object'
+      ? { ...data, httpStatus: response.status }
+      : { ok: false, httpStatus: response.status, error: 'Invalid response' }
+
+  if (isBuilder2IdempotencyConflict(payload, response.status)) {
+    throwBuilder2IdempotencyConflict(payload, response)
+  }
+
+  const ownership = getBuilder2OwnershipErrorCode(payload)
+  if (ownership) {
+    const err = new Error('Ownership verification failed')
+    err.code = ownership
+    err.isOwnershipError = true
+    err.body = payload
+    err.status = response.status
+    throw err
+  }
+
+  if (!response.ok && !isBuilder2IdempotencyInProgress(payload, response.status)) {
+    return { response, payload: { ok: false, ...payload } }
+  }
+
+  return { response, payload }
+}
+
+/**
+ * Bounded retry for uncertain transport outcomes and idempotency-in-progress — same requestId each attempt.
+ * @param {() => Promise<{ response: Response, payload: object }>} mutationFn
+ * @param {{ maxAttempts?: number, baseDelayMs?: number }} [options]
+ */
+export async function callBuilder2MutationWithRetry(
+  mutationFn,
+  {
+    maxAttempts = BUILDER2_MUTATION_RETRY_MAX_ATTEMPTS,
+    baseDelayMs = BUILDER2_MUTATION_RETRY_BASE_MS
+  } = {}
+) {
+  let lastInProgressPayload
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const { response, payload } = await mutationFn()
+      if (isBuilder2IdempotencyInProgress(payload, response.status)) {
+        lastInProgressPayload = payload
+        if (attempt < maxAttempts - 1) {
+          await sleep(baseDelayMs * (attempt + 1))
+          continue
+        }
+        const err = new Error('Builder2 request still in progress')
+        err.code = 'builder2_idempotency_in_progress'
+        err.isIdempotencyInProgress = true
+        err.body = payload
+        err.status = response.status
+        throw err
+      }
+      return { response, payload }
+    } catch (error) {
+      if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
+      if (error?.name === 'AbortError') throw error
+      if (error?.isIdempotencyInProgress) throw error
+      if (!(error instanceof NetworkError)) throw error
+      if (attempt < maxAttempts - 1) {
+        await sleep(baseDelayMs * (attempt + 1))
+        continue
+      }
+      throw error
+    }
+  }
+  if (lastInProgressPayload) {
+    const err = new Error('Builder2 request still in progress')
+    err.code = 'builder2_idempotency_in_progress'
+    err.isIdempotencyInProgress = true
+    err.body = lastInProgressPayload
+    throw err
+  }
+  throw new NetworkError('Network error: Unable to connect to server')
+}
+
+/**
+ * Build canonical initial-generate POST body.
+ * @param {{ productName?: string, productDescription?: string, targetVideoCount?: number }} input
+ */
+export function buildBuilder2InitialGeneratePayload(input = {}) {
+  const body = {
+    productName: input.productName ?? '',
+    productDescription: input.productDescription ?? ''
+  }
+  const targetVideoCount = Number(input.targetVideoCount)
+  if (targetVideoCount === 1 || targetVideoCount === 2) {
+    body.targetVideoCount = targetVideoCount
+  }
+  return body
+}
+
+/**
+ * Replay a persisted pending initial mutation with the SAME requestId and payload.
+ * @param {import('../utils/builder2PendingMutation.js').parseBuilder2PendingMutationRecord extends (...args: any) => infer R ? R : never} pending
+ */
+export async function replayBuilder2PendingMutation(pending, { signal } = {}) {
+  if (!pending?.requestId || !pending?.requestPayload) {
+    throw new Error('Missing pending mutation for replay')
+  }
+  if (pending.operation !== 'initial_generate') {
+    throw new Error('Unsupported Builder2 pending mutation operation')
+  }
+  return generateVideo({
+    ...pending.requestPayload,
+    requestId: pending.requestId,
+    signal
+  })
 }
 
 /**
@@ -373,7 +545,13 @@ async function generate(payload) {
 /**
  * POST /api/generate-video — starts async video job; returns immediately with jobId (Builder2).
  */
-async function generateVideo({ productName, productDescription, targetVideoCount, signal } = {}) {
+async function generateVideo({
+  productName,
+  productDescription,
+  targetVideoCount,
+  signal,
+  requestId
+} = {}) {
   if (isPreview2Builder2OfflineTestArmedWhileOnline()) {
     return builder2Preview2TestArmedOnlineResponse()
   }
@@ -384,38 +562,55 @@ async function generateVideo({ productName, productDescription, targetVideoCount
     return offlineGenerateVideo({ productName, productDescription, targetVideoCount })
   }
 
-  try {
-    const body = {
-      productName: productName ?? '',
-      productDescription: productDescription ?? ''
-    }
-    if (targetVideoCount === 1 || targetVideoCount === 2) {
-      body.targetVideoCount = targetVideoCount
-    }
+  if (!isValidBuilder2RequestId(requestId)) {
+    throw new Error('generateVideo requires valid requestId for production')
+  }
 
-    const response = await fetch(`${API_BASE_URL}/api/generate-video`, {
-      method: 'POST',
-      mode: 'cors',
-      credentials: 'omit',
-      signal,
-      headers: buildBuilder2RequestHeaders({
-        'Content-Type': 'application/json'
-      }),
-      body: JSON.stringify(body)
+  try {
+    const body = buildBuilder2InitialGeneratePayload({
+      productName,
+      productDescription,
+      targetVideoCount
     })
-    const data = await response.json().catch(() => null)
-    if (!data || typeof data !== 'object') {
-      return { ok: false }
+    const { payload } = await callBuilder2MutationWithRetry(() =>
+      builder2GenerateVideoMutationFetch(body, requestId, {
+        signal,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    if (payload?.ok === false) {
+      return payload
     }
-    if (!response.ok) {
-      return { ok: false, ...data }
-    }
-    return data
+    return payload
   } catch (error) {
+    if (error?.isOwnershipError) {
+      return {
+        ok: false,
+        error: error.code,
+        isOwnershipError: true,
+        ...error.body
+      }
+    }
+    if (error?.isIdempotencyConflict) {
+      return {
+        ok: false,
+        error: error.code,
+        isIdempotencyConflict: true,
+        ...error.body
+      }
+    }
+    if (error?.isIdempotencyInProgress) {
+      return {
+        ok: false,
+        error: error.code,
+        isIdempotencyInProgress: true,
+        ...error.body
+      }
+    }
     if (error?.name === 'AbortError') {
       return { ok: false, aborted: true }
     }
-    return { ok: false }
+    return { ok: false, error: 'Network error' }
   }
 }
 

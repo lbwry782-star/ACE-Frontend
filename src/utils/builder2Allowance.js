@@ -163,12 +163,14 @@ export function getBuilder2GenerateButtonLabel(ctx) {
 
 /**
  * Whether the main generate button should be disabled.
- * @param {{ isActivelyProcessing?: boolean, consumed?: boolean, canGenerateNext?: boolean, submitInFlight?: boolean, initBlocked?: boolean, hasActiveIncompleteJob?: boolean }} ctx
+ * @param {{ isActivelyProcessing?: boolean, consumed?: boolean, canGenerateNext?: boolean, submitInFlight?: boolean, initBlocked?: boolean, hasActiveIncompleteJob?: boolean, hasPendingMutation?: boolean, hasActiveJob?: boolean }} ctx
  */
 export function isBuilder2GenerateButtonDisabled(ctx) {
   if (ctx?.initBlocked) return true
   if (ctx?.isActivelyProcessing || ctx?.submitInFlight) return true
   if (ctx?.hasActiveIncompleteJob) return true
+  if (ctx?.hasPendingMutation) return true
+  if (ctx?.hasActiveJob) return true
   if (ctx?.consumed) return true
   if (ctx?.canGenerateNext) return false
   return false

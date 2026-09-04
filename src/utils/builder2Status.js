@@ -6,6 +6,10 @@ export const BUILDER2_MSG_RESTORING = 'משחזר את העבודה האחרונ
 export const BUILDER2_MSG_CANCELLING = 'מבטל את העבודה הקודמת…'
 export const BUILDER2_MSG_CANCEL_BLOCKED =
   'לא ניתן לאשר שהעבודה הקודמת בוטלה. נסו לרענן שוב בעוד רגע.'
+export const BUILDER2_MSG_IDEMPOTENCY_CONFLICT =
+  'אירעה התנגשות בבקשה. לא ניתן להמשיך אוטומטית — נסו לרענן את הדף.'
+export const BUILDER2_MSG_RECOVERY_BLOCKED =
+  'לא ניתן לשחזר בבטחה את הבקשה הקודמת. נסו לרענן שוב בעוד רגע.'
 export const BUILDER2_MSG_DISCONNECTED =
   'החיבור נותק. העבודה נשמרה וננסה להתחבר מחדש.'
 export const BUILDER2_MSG_RESUME_IN_PROGRESS = 'העבודה כבר ממשיכה מהשלב האחרון.'
@@ -150,6 +154,47 @@ export function isBuilder2TerminalNonRecoverableFailure(payload) {
 /**
  * @param {object|null|undefined} payload
  */
+/**
+ * @param {object|null|undefined} payload
+ * @param {number|null|undefined} [httpStatus]
+ */
+export function isBuilder2IdempotencyConflict(payload, httpStatus) {
+  const status = Number(httpStatus ?? payload?.httpStatus ?? 0)
+  const code = String(payload?.error ?? payload?.code ?? '').trim().toLowerCase()
+  return status === 409 && code === 'builder2_idempotency_conflict'
+}
+
+/**
+ * Original requestId still being processed — safe to retry same mutation.
+ * @param {object|null|undefined} payload
+ * @param {number|null|undefined} [httpStatus]
+ */
+export function isBuilder2IdempotencyInProgress(payload, httpStatus) {
+  const status = Number(httpStatus ?? payload?.httpStatus ?? 0)
+  const code = String(payload?.error ?? payload?.code ?? '').trim().toLowerCase()
+  if (code === 'builder2_idempotency_in_progress') return true
+  if (code === 'builder2_request_in_progress') return true
+  if (status === 409 && code === 'request_in_progress') return true
+  if (status === 202 && normalizeBuilder2Status(payload) === 'in_progress') return true
+  return false
+}
+
+/**
+ * @param {object|null|undefined} payload
+ */
+export function extractBuilder2InitialGenerateIds(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { jobId: null, videoAllowanceId: null }
+  }
+  const jobIdRaw = payload.jobId ?? payload.job_id
+  const jobId =
+    jobIdRaw != null && String(jobIdRaw).trim() ? String(jobIdRaw).trim() : null
+  const allowanceRaw = payload.videoAllowanceId ?? payload.video_allowance_id
+  const videoAllowanceId =
+    allowanceRaw != null && String(allowanceRaw).trim() ? String(allowanceRaw).trim() : null
+  return { jobId, videoAllowanceId }
+}
+
 export function isBuilder2CancelAcknowledged(payload) {
   if (!payload || typeof payload !== 'object') return false
   if (payload.ok === true) return true

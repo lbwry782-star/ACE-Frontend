@@ -3,7 +3,7 @@ import ProductForm2 from '../../components/Form/ProductForm2'
 import Builder2ProgressBar from '../../components/ProgressBar/Builder2ProgressBar'
 import VideoAdCard from '../../components/VideoAdCard/VideoAdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
-import { generateVideo, generateVideoNext, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive } from '../../services/api'
+import { generateVideo, generateVideoNext, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive, replayBuilder2PendingMutation, buildBuilder2InitialGeneratePayload } from '../../services/api'
 import { ensureBuilder2OwnerContext } from '../../utils/builder2OwnerContext'
 import {
   resolveBuilder2CheckoutTargetVideoCount
@@ -23,6 +23,7 @@ import {
   readBuilder2OfflineArmedTargetVideoCount,
   syncBuilder2OfflineTestConsoleState,
   isBuilder2OfflinePlaceholderModeActive,
+  isBuilder2OfflinePlaceholderTransportActive,
   isBuilder2OfflineTestArmedWhileOnline,
   BUILDER2_OFFLINE_TEST_STATE_EVENT,
   BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
@@ -47,10 +48,19 @@ import {
   writeBuilder2ActiveJob,
   clearBuilder2ActiveJob
 } from '../../utils/builder2ActiveJob'
+import {
+  readBuilder2PendingMutation,
+  writeBuilder2PendingMutation,
+  clearBuilder2PendingMutation,
+  isUnresolvedBuilder2PendingMutation
+} from '../../utils/builder2PendingMutation'
+import { createBuilder2RequestId } from '../../utils/builder2RequestId'
 import { clearBuilder2FormDraft } from '../../utils/builder2FormDraft'
 import {
   BUILDER2_MSG_CANCELLING,
   BUILDER2_MSG_CANCEL_BLOCKED,
+  BUILDER2_MSG_IDEMPOTENCY_CONFLICT,
+  BUILDER2_MSG_RECOVERY_BLOCKED,
   BUILDER2_MSG_DISCONNECTED,
   BUILDER2_MSG_PREPARING_VIDEO_FILE,
   normalizeBuilder2Status,
@@ -58,6 +68,7 @@ import {
   isBuilder2StatusRunning,
   isBuilder2StatusFailed,
   isBuilder2CancelAcknowledged,
+  extractBuilder2InitialGenerateIds,
   isBuilder2ResumeAlreadyInProgress,
   isBuilder2OwnershipPollFailure,
   getBuilder2OwnershipErrorCode,
@@ -540,6 +551,7 @@ function Builder2Page() {
       }
       clearBuilder2CurrentJob()
       clearBuilder2ActiveJob()
+      clearBuilder2PendingMutation()
       activeJobIdRef.current = null
       progressActiveJobIdRef.current = null
       progressJobStartMsRef.current = null
@@ -755,7 +767,91 @@ function Builder2Page() {
     resetFreshGenerationUi()
     clearBuilder2CurrentJob()
 
+    const pendingMutation = readBuilder2PendingMutation()
     const activeJob = readBuilder2ActiveJob()
+
+    const finishRefreshCancel = async (jobId) => {
+      const result = await cancelBuilder2Job(jobId)
+      if (isBuilder2CancelAcknowledged(result)) {
+        clearBuilder2ActiveJob()
+        clearBuilder2CurrentJob()
+        clearBuilder2PendingMutation()
+        clearBuilder2JobStartTime(jobId)
+        setCancellationGate('ready')
+        setInitPhase('done')
+        return true
+      }
+      setCancellationGate('blocked')
+      setErrorMessage(BUILDER2_MSG_CANCEL_BLOCKED)
+      setInitPhase('done')
+      return false
+    }
+
+    if (isUnresolvedBuilder2PendingMutation(pendingMutation)) {
+      let cancelled = false
+      setCancellationGate('pending')
+      setInitPhase('cancelling')
+
+      ;(async () => {
+        let jobId = activeJob?.jobId ?? null
+        try {
+          if (!jobId) {
+            const replay = await replayBuilder2PendingMutation(pendingMutation)
+            if (cancelled) return
+
+            if (replay?.isIdempotencyConflict) {
+              setCancellationGate('blocked')
+              setErrorPanelTitle('Generation failed')
+              setErrorMessage(BUILDER2_MSG_IDEMPOTENCY_CONFLICT)
+              setInitPhase('done')
+              return
+            }
+
+            if (replay?.isIdempotencyInProgress) {
+              setCancellationGate('blocked')
+              setErrorPanelTitle('Generation failed')
+              setErrorMessage(BUILDER2_MSG_RECOVERY_BLOCKED)
+              setInitPhase('done')
+              return
+            }
+
+            if (replay?.isOwnershipError) {
+              setOwnershipError(getBuilder2SafeFailureMessage(replay))
+              setCancellationGate('blocked')
+              setInitPhase('done')
+              return
+            }
+
+            const extracted = extractBuilder2InitialGenerateIds(replay)
+            jobId = extracted.jobId
+            if (!jobId) {
+              setCancellationGate('blocked')
+              setErrorPanelTitle('Generation failed')
+              setErrorMessage(BUILDER2_MSG_RECOVERY_BLOCKED)
+              setInitPhase('done')
+              return
+            }
+
+            writeBuilder2ActiveJob({ jobId })
+          }
+
+          if (cancelled) return
+          await finishRefreshCancel(jobId)
+        } catch (_) {
+          if (!cancelled) {
+            setCancellationGate('blocked')
+            setErrorPanelTitle('Generation failed')
+            setErrorMessage(BUILDER2_MSG_RECOVERY_BLOCKED)
+            setInitPhase('done')
+          }
+        }
+      })()
+
+      return () => {
+        cancelled = true
+      }
+    }
+
     if (!activeJob?.jobId) {
       setCancellationGate('ready')
       setInitPhase('done')
@@ -768,19 +864,8 @@ function Builder2Page() {
     setInitPhase('cancelling')
 
     ;(async () => {
-      const result = await cancelBuilder2Job(jobId)
+      await finishRefreshCancel(jobId)
       if (cancelled) return
-
-      if (isBuilder2CancelAcknowledged(result)) {
-        clearBuilder2ActiveJob()
-        clearBuilder2CurrentJob()
-        clearBuilder2JobStartTime(jobId)
-        setCancellationGate('ready')
-      } else {
-        setCancellationGate('blocked')
-        setErrorMessage(BUILDER2_MSG_CANCEL_BLOCKED)
-      }
-      setInitPhase('done')
     })()
 
     return () => {
@@ -802,7 +887,9 @@ function Builder2Page() {
       initPhase !== 'done' ||
       (hasActiveIncompleteJob && !isGenerateNext) ||
       state === STATE.GENERATING ||
-      showProgressBar
+      showProgressBar ||
+      (!isGenerateNext && readBuilder2PendingMutation()) ||
+      (!isGenerateNext && readBuilder2ActiveJob()?.jobId)
     ) {
       return
     }
@@ -849,6 +936,7 @@ function Builder2Page() {
 
     try {
       let start
+      let isProductionInitial = false
       if (isGenerateNext) {
         start = await generateVideoNext({
           videoAllowanceId: allowanceState.videoAllowanceId
@@ -866,10 +954,30 @@ function Builder2Page() {
           : preview2Checkout.valid
             ? preview2Checkout.targetVideoCount
             : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
-        start = await generateVideo({
+        isProductionInitial =
+          !isBuilder2OfflinePlaceholderTransportActive() &&
+          !isPreview2Builder2OfflinePlaceholderActive(routeCtx)
+        const requestPayload = buildBuilder2InitialGeneratePayload({
           productName: data.productName,
           productDescription: data.productDescription,
           targetVideoCount
+        })
+        let requestId = null
+        if (isProductionInitial) {
+          requestId = createBuilder2RequestId()
+          writeBuilder2PendingMutation({
+            requestId,
+            operation: 'initial_generate',
+            requestPayload,
+            createdAtMs: Date.now(),
+            checkoutContext: preview2Checkout.valid
+              ? { targetVideoCount: preview2Checkout.targetVideoCount }
+              : { targetVideoCount }
+          })
+        }
+        start = await generateVideo({
+          ...requestPayload,
+          requestId: isProductionInitial ? requestId : undefined
         })
       }
 
@@ -879,12 +987,41 @@ function Builder2Page() {
         return
       }
 
+      if (start?.isIdempotencyConflict) {
+        submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
+        setErrorPanelTitle('Generation failed')
+        setErrorMessage(BUILDER2_MSG_IDEMPOTENCY_CONFLICT)
+        setState(STATE.IDLE)
+        return
+      }
+
+      if (start?.isIdempotencyInProgress) {
+        submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
+        setErrorPanelTitle('Generation failed')
+        setErrorMessage(BUILDER2_MSG_RECOVERY_BLOCKED)
+        setState(STATE.IDLE)
+        return
+      }
+
+      if (start?.isOwnershipError) {
+        submitInFlightRef.current = false
+        generateNextInFlightRef.current = false
+        setOwnershipError(getBuilder2SafeFailureMessage(start))
+        setState(STATE.IDLE)
+        return
+      }
+
       const rawJobId = start?.jobId ?? start?.job_id
       const jobId = rawJobId != null && String(rawJobId).trim() ? String(rawJobId).trim() : null
 
       if (start?.ok === false || !jobId) {
         submitInFlightRef.current = false
         generateNextInFlightRef.current = false
+        if (isProductionInitial) {
+          clearBuilder2PendingMutation()
+        }
         setErrorPanelTitle('Generation failed')
         setErrorMessage(
           start?.error || start?.message || 'Could not start video generation. Please try again.'
@@ -908,6 +1045,9 @@ function Builder2Page() {
         completed: false
       })
       writeBuilder2ActiveJob({ jobId })
+      if (isProductionInitial) {
+        clearBuilder2PendingMutation()
+      }
 
       activeJobIdRef.current = jobId
       progressActiveJobIdRef.current = jobId
@@ -937,6 +1077,8 @@ function Builder2Page() {
     isActivelyProcessing,
     submitInFlight: submitInFlightRef.current || generateNextInFlightRef.current,
     hasActiveIncompleteJob,
+    hasPendingMutation: Boolean(readBuilder2PendingMutation()),
+    hasActiveJob: Boolean(readBuilder2ActiveJob()?.jobId),
     consumed: allowanceConsumed,
     canGenerateNext: Boolean(allowanceState?.canGenerateNext)
   })
