@@ -4,6 +4,9 @@ import Builder2ProgressBar from '../../components/ProgressBar/Builder2ProgressBa
 import VideoAdCard from '../../components/VideoAdCard/VideoAdCard'
 import ErrorPanel from '../../components/Error/ErrorPanel'
 import { generateVideo, generateVideoNext, fetchVideoStatus, cancelBuilder2Job, cancelBuilder2JobKeepalive, replayBuilder2PendingMutation, buildBuilder2InitialGeneratePayload } from '../../services/api'
+import { useSecureBuilderEntryGuard } from '../../hooks/useSecureBuilderEntryGuard.js'
+import { isSecurityEnabled } from '../../services/securityConfig.js'
+import { resolveBuilder2PaidTargetVideoCount } from '../../utils/secureBuilderQuantity.js'
 import { ensureBuilder2OwnerContext } from '../../utils/builder2OwnerContext'
 import {
   resolveBuilder2CheckoutTargetVideoCount
@@ -157,6 +160,7 @@ function extractResolvedProductName(payload) {
 }
 
 function Builder2Page() {
+  const entryGuard = useSecureBuilderEntryGuard('builder2')
   const [state, setState] = useState(STATE.IDLE)
   const [initPhase, setInitPhase] = useState('checking')
   const [cancellationGate, setCancellationGate] = useState('ready')
@@ -754,6 +758,7 @@ function Builder2Page() {
 
   useEffect(() => {
     const onPageHide = () => {
+      if (isSecurityEnabled()) return
       const activeJob = readBuilder2ActiveJob()
       if (!activeJob?.jobId) return
       cancelBuilder2JobKeepalive(activeJob.jobId, { reason: 'frontend_refresh' })
@@ -764,6 +769,20 @@ function Builder2Page() {
 
   useEffect(() => {
     ensureBuilder2OwnerContext()
+
+    if (isSecurityEnabled()) {
+      const activeJob = readBuilder2ActiveJob()
+      const currentJob = readBuilder2CurrentJob()
+      if (activeJob?.jobId) {
+        activeJobIdRef.current = activeJob.jobId
+      } else if (currentJob?.jobId) {
+        activeJobIdRef.current = currentJob.jobId
+      }
+      setCancellationGate('ready')
+      setInitPhase('done')
+      return undefined
+    }
+
     resetFreshGenerationUi()
     clearBuilder2CurrentJob()
 
@@ -873,6 +892,23 @@ function Builder2Page() {
     }
   }, [resetFreshGenerationUi])
 
+  useEffect(() => {
+    if (!isSecurityEnabled()) return
+    if (initPhase !== 'done' || cancellationGate !== 'ready') return
+    if (!entryGuard.allowed) return
+
+    const activeJob = readBuilder2ActiveJob()
+    const currentJob = readBuilder2CurrentJob()
+    const jobId = activeJob?.jobId ?? currentJob?.jobId
+    if (!jobId || currentJob?.completed) return
+    if (activeJobIdRef.current === jobId && showProgressBar) return
+
+    activeJobIdRef.current = jobId
+    setState(STATE.GENERATING)
+    beginProgress(jobId)
+    startPolling(jobId)
+  }, [initPhase, cancellationGate, entryGuard.allowed, startPolling, beginProgress, showProgressBar])
+
   const handleSubmit = async (data) => {
     const persistedJob = readBuilder2CurrentJob()
     const hasActiveIncompleteJob = Boolean(persistedJob?.jobId && !persistedJob?.completed)
@@ -901,6 +937,10 @@ function Builder2Page() {
     if (isPreview2Builder2OfflineTestArmedWhileOnline()) {
       setErrorPanelTitle('Preview2 test not active')
       setErrorMessage(PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE)
+      return
+    }
+
+    if (isSecurityEnabled() && !entryGuard.allowed) {
       return
     }
 
@@ -949,11 +989,22 @@ function Builder2Page() {
         const preview2Checkout = resolvePreview2Builder2OfflineTestCheckout(routeCtx)
         const offlineTarget = resolveBuilder2OfflineTargetVideoCount()
         const armedTarget = readBuilder2OfflineArmedTargetVideoCount()
+        const securePaid = isSecurityEnabled()
+          ? resolveBuilder2PaidTargetVideoCount(routeCtx)
+          : null
         const targetVideoCount = allowanceLockedRef.current
           ? allowanceState?.targetVideoCount ?? initialTargetVideoCountRef.current ?? 1
-          : preview2Checkout.valid
-            ? preview2Checkout.targetVideoCount
-            : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
+          : securePaid?.targetVideoCount != null
+            ? securePaid.targetVideoCount
+            : preview2Checkout.valid
+              ? preview2Checkout.targetVideoCount
+              : offlineTarget ?? armedTarget ?? initialTargetVideoCountRef.current ?? 1
+        if (isSecurityEnabled() && securePaid?.targetVideoCount == null) {
+          setErrorPanelTitle('Generation failed')
+          setErrorMessage('לא ניתן לאמת את כמות הסרטונים שנרכשה.')
+          submitInFlightRef.current = false
+          return
+        }
         isProductionInitial =
           !isBuilder2OfflinePlaceholderTransportActive() &&
           !isPreview2Builder2OfflinePlaceholderActive(routeCtx)

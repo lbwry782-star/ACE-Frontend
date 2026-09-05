@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import "./UnderConstructionPage.css";
 
 const bgVideo = `${import.meta.env.BASE_URL}assets/${encodeURIComponent("ווידאו_פתיחה.mp4")}`;
@@ -7,7 +8,9 @@ const OPENING_PREVIEW1_URL = "https://ace-advertising.agency/#/preview1";
 const OPENING_PREVIEW2_URL = "https://ace-advertising.agency/#/preview2";
 
 export default function UnderConstructionPage() {
-  const [isChecked33, setIsChecked33] = useState(false);
+    const location = useLocation();
+    const aceMessage = location.state?.aceMessage ?? null;
+    const [isChecked33, setIsChecked33] = useState(false);
 
   useEffect(() => {
     const app = document.querySelector(".app");
@@ -36,6 +39,11 @@ export default function UnderConstructionPage() {
 
   return (
     <div className="uc-page">
+      {aceMessage ? (
+        <p className="uc-safe-message" dir="rtl" role="status">
+          {aceMessage}
+        </p>
+      ) : null}
       <video
         className="uc-video"
         src={bgVideo}

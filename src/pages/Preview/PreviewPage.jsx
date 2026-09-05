@@ -1,6 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useContext } from 'react'
 import { Link } from 'react-router-dom'
+import { SecurityConfigContext } from '../../App'
 import { startBuilder1Preview1Checkout } from '../../utils/builder1Checkout.js'
+import { PREVIEW1_TIER_TO_OFFER_CODE } from '../../utils/secureCheckoutOffers.js'
+import { startSecurePreviewCheckout } from '../../services/secureCheckoutFlow.js'
 import { preview1TierKeyToAdCount } from '../../utils/builder1CampaignCount.js'
 import {
   readPreview1Builder1OfflineTestArmed,
@@ -73,6 +76,8 @@ function usePreview1MobileLayout() {
 }
 
 function PreviewPage() {
+  const { securityEnabled, securityConfigLoaded, securityConfigError } =
+    useContext(SecurityConfigContext)
   const isMobile = usePreview1MobileLayout()
   const [mobileActiveKey, setMobileActiveKey] = useState(null)
   const navigateLockRef = useRef(false)
@@ -96,15 +101,30 @@ function PreviewPage() {
     }
   }, [isMobile])
 
-  const goToPayment = (assetKey) => {
-    const adCount = preview1TierKeyToAdCount(assetKey)
-    if (adCount == null) return
-    const checkout = startBuilder1Preview1Checkout(adCount)
+  const goToPayment = async (assetKey) => {
     if (readPreview1Builder1OfflineTestArmed()) {
+      const adCount = preview1TierKeyToAdCount(assetKey)
+      if (adCount == null) return
+      const checkout = startBuilder1Preview1Checkout(adCount)
       markBuilder1CheckoutPreview1OfflineTest(checkout.checkoutId)
       window.location.hash = buildPreview1Builder1OfflineTestBuilderHash(checkout.checkoutId)
       return
     }
+
+    if (securityConfigLoaded && securityEnabled) {
+      const offerCode = PREVIEW1_TIER_TO_OFFER_CODE[assetKey]
+      if (!offerCode) return
+      await startSecurePreviewCheckout(offerCode)
+      return
+    }
+
+    if (securityConfigError) {
+      return
+    }
+
+    const adCount = preview1TierKeyToAdCount(assetKey)
+    if (adCount == null) return
+    startBuilder1Preview1Checkout(adCount)
     const url = PREVIEW1_PAYMENT_URLS[assetKey]
     if (url) window.location.href = url
   }

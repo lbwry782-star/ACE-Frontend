@@ -1,6 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useContext } from 'react'
 import { Link } from 'react-router-dom'
+import { SecurityConfigContext } from '../../App'
 import { startBuilder2Preview2Checkout, preview2TierKeyToTargetVideoCount } from '../../utils/builder2VideoCheckout'
+import { PREVIEW2_TIER_TO_OFFER_CODE } from '../../utils/secureCheckoutOffers.js'
+import { startSecurePreviewCheckout } from '../../services/secureCheckoutFlow.js'
 import {
   readPreview2Builder2OfflineTestArmed,
   buildPreview2Builder2OfflineTestBuilder2Hash,
@@ -61,6 +64,8 @@ function usePreview2MobileLayout() {
 }
 
 function Preview2Page() {
+  const { securityEnabled, securityConfigLoaded, securityConfigError } =
+    useContext(SecurityConfigContext)
   const isMobile = usePreview2MobileLayout()
   const [mobileActiveKey, setMobileActiveKey] = useState(null)
   const navigateLockRef = useRef(false)
@@ -84,15 +89,30 @@ function Preview2Page() {
     }
   }, [isMobile])
 
-  const goToPayment = (assetKey) => {
-    const targetVideoCount = preview2TierKeyToTargetVideoCount(assetKey)
-    if (targetVideoCount == null) return
-    const checkout = startBuilder2Preview2Checkout(targetVideoCount)
+  const goToPayment = async (assetKey) => {
     if (readPreview2Builder2OfflineTestArmed()) {
+      const targetVideoCount = preview2TierKeyToTargetVideoCount(assetKey)
+      if (targetVideoCount == null) return
+      const checkout = startBuilder2Preview2Checkout(targetVideoCount)
       markBuilder2VideoCheckoutPreview2OfflineTest(checkout.checkoutId)
       window.location.hash = buildPreview2Builder2OfflineTestBuilder2Hash(checkout.checkoutId)
       return
     }
+
+    if (securityConfigLoaded && securityEnabled) {
+      const offerCode = PREVIEW2_TIER_TO_OFFER_CODE[assetKey]
+      if (!offerCode) return
+      await startSecurePreviewCheckout(offerCode)
+      return
+    }
+
+    if (securityConfigError) {
+      return
+    }
+
+    const targetVideoCount = preview2TierKeyToTargetVideoCount(assetKey)
+    if (targetVideoCount == null) return
+    startBuilder2Preview2Checkout(targetVideoCount)
     const url = PREVIEW2_PAYMENT_URLS[assetKey]
     if (url) window.location.href = url
   }

@@ -98,6 +98,9 @@ import {
   resolveBuilder1CheckoutAdCount,
   readBuilder1CheckoutIdFromRoute
 } from '../../utils/builder1Checkout.js'
+import { useSecureBuilderEntryGuard } from '../../hooks/useSecureBuilderEntryGuard.js'
+import { isSecurityEnabled } from '../../services/securityConfig.js'
+import { resolveBuilder1PaidAdCount } from '../../utils/secureBuilderQuantity.js'
 import {
   registerPreview1Builder1OfflineTestConsoleHelpers,
   resolvePreview1Builder1OfflineTestCheckout,
@@ -218,7 +221,8 @@ function mapUserFacingError(err, code) {
 }
 
 function BuilderPage() {
-  const { securityEnabled = true, securityConfigLoaded = false } = useContext(SecurityConfigContext)
+  const { securityEnabled = false, securityConfigLoaded = false } = useContext(SecurityConfigContext)
+  const entryGuard = useSecureBuilderEntryGuard('builder1')
   const location = useLocation()
   const navigate = useNavigate()
   const [state, setState] = useState(STATE.IDLE)
@@ -286,14 +290,24 @@ function BuilderPage() {
   const activeCheckoutIdRef = useRef(null)
 
   const resolveTabBuilder1AdCount = useCallback(() => {
-    const resolved = resolveBuilder1CheckoutAdCount({
-      checkoutId: readBuilder1CheckoutIdFromRoute(location.search, window.location.hash),
-      search: location.search,
-      hash: window.location.hash,
-      targetAdCount: lockedTargetAdCountRef.current
-    })
-    activeCheckoutIdRef.current = resolved.checkoutId
-    return resolved.adCount
+    const resolved = isSecurityEnabled()
+      ? resolveBuilder1PaidAdCount({
+          checkoutId: readBuilder1CheckoutIdFromRoute(location.search, window.location.hash),
+          search: location.search,
+          hash: window.location.hash,
+          targetAdCount: lockedTargetAdCountRef.current
+        })
+      : resolveBuilder1CheckoutAdCount({
+          checkoutId: readBuilder1CheckoutIdFromRoute(location.search, window.location.hash),
+          search: location.search,
+          hash: window.location.hash,
+          targetAdCount: lockedTargetAdCountRef.current
+        })
+    if (resolved.adCount != null) {
+      activeCheckoutIdRef.current = resolved.checkoutId
+      return resolved.adCount
+    }
+    return 2
   }, [location.search])
 
   const [reattachBusy, setReattachBusy] = useState(false)
@@ -1029,6 +1043,7 @@ function BuilderPage() {
 
   useEffect(() => {
     const onPageHide = () => {
+      if (isSecurityEnabled()) return
       const activeJob = readBuilder1ActiveJob()
       if (!activeJob?.jobId) return
       cancelBuilder1JobKeepalive(activeJob.jobId, { reason: 'frontend_refresh' })
@@ -1039,6 +1054,62 @@ function BuilderPage() {
 
   useEffect(() => {
     ensureBuilder1OwnerContext()
+
+    if (isSecurityEnabled()) {
+      const pendingMutation = readBuilder1PendingMutation()
+      const activeJob = readBuilder1ActiveJob()
+
+      if (pendingMutation?.operation === 'resume_planning') {
+        let cancelled = false
+        setCancellationGate('pending')
+        setInitPhase('cancelling')
+
+        ;(async () => {
+          const pollToken = ++initialPollTokenRef.current
+          try {
+            setState(STATE.GENERATING)
+            beginProgress(BUILDER1_PROGRESS_OPERATION.INITIAL_CAMPAIGN)
+            progressLanguageRef.current = displayLanguage
+
+            await executeBuilder1PlanningResumeFlow({
+              jobId: pendingMutation.jobId,
+              campaignId: pendingMutation.campaignId,
+              requestId: pendingMutation.requestId,
+              pollToken,
+              pendingAlreadyWritten: true
+            })
+          } catch (err) {
+            if (!cancelled) {
+              handlePlanningResumeFailure(err, {
+                jobId: pendingMutation.jobId,
+                campaignId: pendingMutation.campaignId,
+                pollToken
+              })
+            }
+          } finally {
+            if (!cancelled) {
+              setCancellationGate('ready')
+              setInitPhase('done')
+            }
+          }
+        })()
+
+        return () => {
+          cancelled = true
+        }
+      }
+
+      if (activeJob?.jobId) {
+        recoverBootstrapJobIdRef.current = activeJob.jobId
+      } else if (isUnresolvedBuilder1PendingMutation(pendingMutation) && pendingMutation?.jobId) {
+        recoverBootstrapJobIdRef.current = pendingMutation.jobId
+      }
+
+      setCancellationGate('ready')
+      setInitPhase('done')
+      return undefined
+    }
+
     resetFreshBuilder1Ui()
 
     const pendingMutation = readBuilder1PendingMutation()
@@ -1241,6 +1312,7 @@ function BuilderPage() {
     if (cancellationGate !== 'ready' || initPhase !== 'done') return
     if (readBuilder1ActiveJob()) return
     if (readBuilder1PendingMutation()) return
+    if (isSecurityEnabled() && !entryGuard.allowed) return
 
     const preview1RouteCtx = {
       hash: window.location.hash,
@@ -1280,12 +1352,31 @@ function BuilderPage() {
     generateRequestInFlightRef.current = true
     const pollToken = ++initialPollTokenRef.current
     const userLeftProductNameEmpty = !nameValidation.productName
-    const adCount = resolveBuilder1InitialAdCount({
-      targetAdCount: lockedTargetAdCountRef.current ?? targetAdCount,
-      checkoutId: activeCheckoutIdRef.current,
-      search: location.search,
-      hash: window.location.hash
-    })
+    if (isSecurityEnabled()) {
+      const secureCount = resolveBuilder1PaidAdCount({
+        checkoutId: activeCheckoutIdRef.current,
+        search: location.search,
+        hash: window.location.hash,
+        targetAdCount: lockedTargetAdCountRef.current ?? targetAdCount
+      }).adCount
+      if (secureCount == null) {
+        setError('לא ניתן לאמת את כמות המודעות שנרכשה.')
+        setState(STATE.ERROR)
+        generateRequestInFlightRef.current = false
+        return
+      }
+      lockedTargetAdCountRef.current = secureCount
+      setTargetAdCount(secureCount)
+    }
+
+    const adCount = isSecurityEnabled()
+      ? lockedTargetAdCountRef.current
+      : resolveBuilder1InitialAdCount({
+          targetAdCount: lockedTargetAdCountRef.current ?? targetAdCount,
+          checkoutId: activeCheckoutIdRef.current,
+          search: location.search,
+          hash: window.location.hash
+        })
     lockedTargetAdCountRef.current = adCount
     setTargetAdCount(adCount)
     progressLanguageRef.current = 'he'
@@ -1908,6 +1999,19 @@ function BuilderPage() {
         [adIndex]: { loading: false, error: null }
       }))
     } catch (downloadErr) {
+      if (downloadErr?.isSecureCheckoutRequired) {
+        setZipStateByAd((prev) => ({
+          ...prev,
+          [adIndex]: {
+            loading: false,
+            error:
+              displayLanguage === 'he'
+                ? 'לא ניתן להוריד — נדרש תשלום מאומת באותו חלון.'
+                : 'Download requires verified payment in this browser tab.'
+          }
+        }))
+        return
+      }
       if (downloadErr?.isOwnershipError) {
         setOwnershipError(BUILDER1_MSG_OWNERSHIP)
         setCancellationGate('blocked')

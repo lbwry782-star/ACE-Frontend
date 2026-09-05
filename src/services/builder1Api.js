@@ -21,6 +21,11 @@ import {
   isBuilder1IdempotencyConflict
 } from '../utils/builder1Status.js'
 import { isValidBuilder1RequestId } from '../utils/builder1RequestId.js'
+import {
+  requireSecureCheckoutAuthHeaders,
+  SecureCheckoutRequiredError
+} from './secureRequest.js'
+import { isSecurityEnabled } from './securityConfig.js'
 
 export const BUILDER1_POLL_INTERVAL_MS = 2000
 export const BUILDER1_POLL_TIMEOUT_MS = 15 * 60 * 1000
@@ -51,6 +56,9 @@ function builder1Preview1TestArmedOnlineErrorResponse() {
  * Optional Authorization from existing app session (sid) — no new auth system.
  */
 export function getBuilder1AuthorizationHeader() {
+  if (isSecurityEnabled()) {
+    return requireSecureCheckoutAuthHeaders({ expectedBuilder: 'builder1' }).Authorization
+  }
   if (typeof window === 'undefined') return null
   try {
     const sid =
@@ -70,14 +78,20 @@ export function getBuilder1AuthorizationHeader() {
  */
 export function buildBuilder1RequestHeaders(extra = {}) {
   ensureBuilder1OwnerContext()
+  const secureHeaders = isSecurityEnabled()
+    ? requireSecureCheckoutAuthHeaders({ expectedBuilder: 'builder1' })
+    : {}
   const headers = {
     Accept: 'application/json',
     'X-ACE-Batch-State': getBuilder1OwnerBatchStateHeader(),
+    ...secureHeaders,
     ...extra
   }
-  const auth = getBuilder1AuthorizationHeader()
-  if (auth) {
-    headers.Authorization = auth
+  if (!isSecurityEnabled()) {
+    const auth = getBuilder1AuthorizationHeader()
+    if (auth) {
+      headers.Authorization = auth
+    }
   }
   return headers
 }
@@ -102,6 +116,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function propagateBuilder1ApiError(error) {
+  if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
+  if (error?.isSecureCheckoutRequired || error instanceof SecureCheckoutRequiredError) throw error
+  if (error?.name === 'AbortError') throw error
+  throw new NetworkError('Network error: Unable to connect to server')
+}
+
 /**
  * Bounded retry for uncertain transport outcomes — same requestId each attempt.
  * @param {() => Promise<{ response: Response, payload: object }>} mutationFn
@@ -117,6 +138,7 @@ export async function callBuilder1MutationWithRetry(
       return await mutationFn()
     } catch (error) {
       if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
+      if (error?.isSecureCheckoutRequired || error instanceof SecureCheckoutRequiredError) throw error
       if (error?.name === 'AbortError') throw error
       if (!(error instanceof NetworkError)) throw error
       lastError = error
@@ -233,9 +255,7 @@ export async function builder1Generate(body, { signal, requestId } = {}) {
     )
     return { response, payload }
   } catch (error) {
-    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 
@@ -258,9 +278,7 @@ export async function builder1GenerateNext(body, { signal, requestId } = {}) {
     )
     return { response, payload }
   } catch (error) {
-    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 
@@ -283,9 +301,7 @@ export async function builder1RetryImage(body, { signal, requestId } = {}) {
     )
     return { response, payload }
   } catch (error) {
-    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 
@@ -313,9 +329,7 @@ export async function resumeBuilder1Planning(jobId, { signal, requestId } = {}) 
     )
     return { response, payload }
   } catch (error) {
-    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 
@@ -338,9 +352,7 @@ export async function builder1RepairPhysical(body, { signal, requestId } = {}) {
     )
     return { response, payload }
   } catch (error) {
-    if (error?.isOwnershipError || error?.isIdempotencyConflict) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 
@@ -423,6 +435,9 @@ export async function cancelBuilder1Job(jobId, { signal, reason = 'frontend_refr
         isOwnershipError: true
       }
     }
+    if (error?.isSecureCheckoutRequired || error instanceof SecureCheckoutRequiredError) {
+      throw error
+    }
     if (error?.name === 'AbortError') {
       return { ok: false, aborted: true }
     }
@@ -484,9 +499,7 @@ export async function builder1DownloadZip(body, { signal, acceptZip = true } = {
 
     return response
   } catch (error) {
-    if (error?.isOwnershipError) throw error
-    if (error?.name === 'AbortError') throw error
-    throw new NetworkError('Network error: Unable to connect to server')
+    propagateBuilder1ApiError(error)
   }
 }
 

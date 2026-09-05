@@ -341,3 +341,15 @@
     z-index: 1;
   }
 }
+
+.uc-safe-message {
+  position: relative;
+  z-index: 5;
+  margin: 0.75rem auto 0;
+  max-width: 36rem;
+  padding: 0.65rem 1rem;
+  text-align: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: 8px;
+}

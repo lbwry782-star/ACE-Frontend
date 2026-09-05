@@ -151,9 +151,10 @@ assert.equal(resolveBuilder1InitialAdCount({ targetAdCount: 3, checkoutId: rever
 // Source wiring
 assert.match(previewSource, /startBuilder1Preview1Checkout/)
 assert.doesNotMatch(previewSource, /saveBuilder1CampaignAdCount/)
-assert.match(appSource, /import \{ fetchSecurityConfig \} from '\.\/services\/api'/)
-assert.match(appSource, /fetchSecurityConfig\(\)/)
+assert.match(appSource, /loadSecurityConfig/)
+assert.match(appSource, /from '\.\/services\/securityConfig'/)
 assert.match(appSource, /buildBuilder1PaymentReturnHash/)
+assert.match(appSource, /path="\/payment-return"/)
 assert.match(builderPageSource, /resolveBuilder1CheckoutAdCount/)
 assert.match(builderPageSource, /readBuilder1CheckoutIdFromRoute/)
 assert.match(builderPageSource, /resolveBuilder1InitialAdCount/)

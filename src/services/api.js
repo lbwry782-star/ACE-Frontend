@@ -19,6 +19,8 @@ import {
   isPreview2Builder2OfflineTestArmedWhileOnline,
   PREVIEW2_BUILDER2_OFFLINE_TEST_ARMED_ONLINE_MESSAGE
 } from '../utils/preview2Builder2OfflineTest.js'
+import { requireSecureCheckoutAuthHeaders } from './secureRequest.js'
+import { isSecurityEnabled, loadSecurityConfig } from './securityConfig.js'
 
 function builder2OfflineTestArmedOnlineResponse() {
   return {
@@ -69,9 +71,13 @@ const API_BASE_URL = normalizeBaseUrl(getBackendUrl())
  * @param {Record<string, string>} [extra]
  */
 function buildBuilder2RequestHeaders(extra = {}) {
+  const secureHeaders = isSecurityEnabled()
+    ? requireSecureCheckoutAuthHeaders({ expectedBuilder: 'builder2' })
+    : {}
   return {
     Accept: 'application/json',
     'X-ACE-Batch-State': getBuilder2OwnerBatchStateHeader(),
+    ...secureHeaders,
     ...extra
   }
 }
@@ -243,23 +249,14 @@ export async function replayBuilder2PendingMutation(pending, { signal } = {}) {
 }
 
 /**
- * GET backend security config. Used once at app startup.
- * On any failure (network, non-ok, parse error), returns { securityEnabled: true } (secure default).
+ * @deprecated Prefer loadSecurityConfig() from securityConfig.js — fail-closed on errors.
  */
 async function fetchSecurityConfig() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/security/config`, {
-      method: 'GET',
-      mode: 'cors',
-      credentials: 'omit',
-      headers: { Accept: 'application/json' }
-    })
-    if (!response.ok) return { securityEnabled: true }
-    const data = await response.json()
-    const enabled = data && typeof data.securityEnabled === 'boolean' ? data.securityEnabled : true
-    return { securityEnabled: enabled }
-  } catch (_) {
-    return { securityEnabled: true }
+  const snapshot = await loadSecurityConfig()
+  return {
+    securityEnabled: snapshot.securityEnabled === true,
+    status: snapshot.status,
+    error: snapshot.error ?? null
   }
 }
 
