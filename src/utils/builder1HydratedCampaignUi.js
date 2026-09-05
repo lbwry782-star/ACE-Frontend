@@ -2,7 +2,7 @@
  * Canonical UI form sync from a hydrated Builder1 campaign session.
  */
 
-import { normalizeBuilder1FormatForApi } from './builder1Campaign.js'
+import { resolveBuilder1CampaignFormat } from './builder1Campaign.js'
 
 /**
  * @param {unknown} session
@@ -28,7 +28,6 @@ export function readBuilder1ProductDescriptionFromSession(session) {
  */
 export function deriveBuilder1FormSyncFromHydratedSession(session, existingForm = {}) {
   const campaign = session?.campaign ?? {}
-  const composition = session?.composition ?? {}
   const patch = {}
 
   const productNameResolved = String(campaign.productNameResolved ?? campaign.productName ?? '').trim()
@@ -36,7 +35,7 @@ export function deriveBuilder1FormSyncFromHydratedSession(session, existingForm 
     patch.productName = productNameResolved
   }
 
-  const format = normalizeBuilder1FormatForApi(campaign.format ?? composition.format)
+  const format = resolveBuilder1CampaignFormat(session)
   if (format) {
     patch.imageSize = format
   }

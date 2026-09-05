@@ -72,6 +72,7 @@ import {
   createDevMockNextAd,
   parseRateLimitError,
   sortAdsByIndex,
+  resolveBuilder1AdDisplayFormat,
   validateBuilder1InitialSubmitInputs,
   getBuilder1ProductNameGenerationFailedMessage,
   getBuilder1ProductDescriptionFieldMessage,
@@ -1937,8 +1938,6 @@ function BuilderPage() {
   }, [formData.productName, formData.productDescription, resolveTabBuilder1AdCount])
 
   const sortedAds = campaignSession ? sortAdsByIndex(campaignSession.ads) : []
-  const campaignFormat =
-    normalizeBuilder1FormatForApi(campaignSession?.campaign?.format) || 'portrait'
 
   return (
     <div className="builder-page">
@@ -2034,7 +2033,11 @@ function BuilderPage() {
               <AdCard
                 key={`campaign-ad-${campaignSession.campaignId}-${ad.index}`}
                 ad={ad}
-                format={campaignFormat}
+                format={resolveBuilder1AdDisplayFormat({
+                  session: campaignSession,
+                  ad,
+                  formFallback: formData.imageSize
+                })}
                 productName={campaignSession.campaign.productNameResolved}
                 targetAdCount={campaignSession.targetAdCount}
                 language={displayLanguage}

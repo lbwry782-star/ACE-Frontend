@@ -22,6 +22,9 @@ import {
   getFormatRatioCss,
   getBuilder1FormatDimensions,
   BUILDER1_FORMAT_DIMENSIONS,
+  resolveBuilder1CampaignFormat,
+  resolveBuilder1AdDisplayFormat,
+  normalizeAdFromResponse,
   toBuilder1ApiImageBase64,
   buildSingleAdZipRequest,
   sanitizeSingleAdZipFilename,
@@ -284,6 +287,73 @@ for (const [format, dims] of Object.entries(BUILDER1_FORMAT_DIMENSIONS)) {
 }
 assert.match(adCardCss, /\.builder1-final-ad-image[\s\S]*object-fit:\s*contain/)
 assert.doesNotMatch(adCardCss, /\.builder1-final-ad-image[\s\S]*object-fit:\s*cover/)
+
+// Builder1 result display format resolution (landscape letterboxing regression)
+assert.equal(
+  resolveBuilder1CampaignFormat({
+    campaign: { productNameResolved: 'Brand' },
+    composition: { format: 'landscape' }
+  }),
+  'landscape'
+)
+assert.equal(
+  resolveBuilder1CampaignFormat({
+    campaign: { format: 'portrait' },
+    composition: { format: 'landscape' }
+  }),
+  'portrait'
+)
+assert.equal(
+  resolveBuilder1AdDisplayFormat({
+    session: { composition: { format: 'portrait' } },
+    ad: { index: 2, format: 'landscape' }
+  }),
+  'landscape'
+)
+assert.equal(
+  getFormatRatioCss(
+    resolveBuilder1AdDisplayFormat({
+      session: { composition: { format: 'landscape' } },
+      ad: { index: 1 }
+    })
+  ),
+  '1536 / 1080'
+)
+assert.equal(
+  getFormatRatioCss(
+    resolveBuilder1AdDisplayFormat({
+      session: { campaign: { format: 'portrait' }, composition: { format: 'portrait' } },
+      ad: { index: 1 }
+    })
+  ),
+  '1080 / 1536'
+)
+assert.equal(
+  getFormatRatioCss(
+    resolveBuilder1AdDisplayFormat({
+      session: { campaign: {}, composition: { format: 'square' } },
+      ad: { index: 1 }
+    })
+  ),
+  '1080 / 1080'
+)
+const dimensionAd = normalizeAdFromResponse({
+  index: 1,
+  marketingText: 'copy',
+  imageBase64: 'abc',
+  imageWidth: 1536,
+  imageHeight: 1080
+})
+assert.equal(dimensionAd.ok, true)
+assert.equal(dimensionAd.ad.format, 'landscape')
+assert.equal(
+  getFormatRatioCss(resolveBuilder1AdDisplayFormat({ session: {}, ad: dimensionAd.ad })),
+  '1536 / 1080'
+)
+assert.match(builderPageSource, /resolveBuilder1AdDisplayFormat/)
+assert.doesNotMatch(builderPageSource, /format=\{campaignFormat\}/)
+assert.match(adCardSource, /--builder1-ad-ratio/)
+assert.match(adCardCss, /aspect-ratio:\s*var\(--builder1-ad-ratio/)
 
 // 19–22. Per-ad ZIP
 assert.equal(sanitizeSingleAdZipFilename(1), 'ad-01.zip')

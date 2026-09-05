@@ -574,6 +574,46 @@ export function getFormatRatioCss(format) {
   return `${width} / ${height}`
 }
 
+/**
+ * Canonical Builder1 display format from session metadata (campaign → composition → form fallback).
+ * @param {unknown} session
+ * @param {unknown} [formFallback]
+ */
+export function resolveBuilder1CampaignFormat(session, formFallback) {
+  if (!session || typeof session !== 'object') {
+    return normalizeBuilder1FormatForApi(formFallback) || 'portrait'
+  }
+  const campaign =
+    session.campaign && typeof session.campaign === 'object' ? session.campaign : {}
+  const composition =
+    session.composition && typeof session.composition === 'object' ? session.composition : {}
+  const resolved = normalizeBuilder1FormatForApi(
+    campaign.format ?? composition.format ?? session.format ?? formFallback
+  )
+  return resolved || 'portrait'
+}
+
+/**
+ * Per-ad Builder1 result display format — ad metadata wins, then session campaign/composition.
+ * @param {{ session?: unknown, ad?: unknown, formFallback?: unknown }} ctx
+ */
+export function resolveBuilder1AdDisplayFormat(ctx = {}) {
+  const ad = ctx.ad && typeof ctx.ad === 'object' ? ctx.ad : null
+  if (ad) {
+    const width = ad.imageWidth ?? ad.image_width
+    const height = ad.imageHeight ?? ad.image_height
+    const dimensionHint =
+      width != null && height != null ? `${width}x${height}` : null
+    const adFormat = normalizeBuilder1FormatForApi(
+      ad.format ?? ad.imageFormat ?? ad.image_format ?? dimensionHint
+    )
+    if (adFormat) {
+      return adFormat
+    }
+  }
+  return resolveBuilder1CampaignFormat(ctx.session, ctx.formFallback)
+}
+
 /** @param {unknown} raw */
 export function sanitizeHexColor(raw) {
   if (typeof raw !== 'string') return null
@@ -841,14 +881,27 @@ export function normalizeAdFromResponse(ad) {
     return { ok: false, error: 'response_contract_invalid', message: `Invalid marketingText for ad ${idx}` }
   }
 
+  const width = ad.imageWidth ?? ad.image_width
+  const height = ad.imageHeight ?? ad.image_height
+  const dimensionHint =
+    width != null && height != null ? `${width}x${height}` : null
+  const adFormat = normalizeBuilder1FormatForApi(
+    ad.format ?? ad.imageFormat ?? ad.image_format ?? dimensionHint
+  )
+
+  const normalizedAd = {
+    index: idx,
+    headline: ad.headline == null ? null : String(ad.headline).trim() || null,
+    marketingText: String(mt ?? ''),
+    imageSrc: toBuilder1ImageSrc(img)
+  }
+  if (adFormat) {
+    normalizedAd.format = adFormat
+  }
+
   return {
     ok: true,
-    ad: {
-      index: idx,
-      headline: ad.headline == null ? null : String(ad.headline).trim() || null,
-      marketingText: String(mt ?? ''),
-      imageSrc: toBuilder1ImageSrc(img)
-    }
+    ad: normalizedAd
   }
 }
 
